@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Inception City</title>
+    <meta name="description" content="A folding, dreaming city you can bend with your hands and walk through on foot." />
+    <meta name="theme-color" content="#0b0d12" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 60 L8 30 Q10 22 32 20 Q54 22 56 30 Z' fill='%23d9b26f'/%3E%3Crect x='29' y='4' width='6' height='18' rx='2' fill='%23d9b26f'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body class="intro">
+    <canvas id="scene" aria-label="Inception City, an interactive folding 3D city"></canvas>
+
+    <header id="brand">
+      <canvas id="totem" width="56" height="74" aria-hidden="true"></canvas>
+      <div>
+        <div class="wordmark">Inception City</div>
+        <div id="level-name" class="level-name">Level 1 · The City</div>
+      </div>
+    </header>
+
+    <button id="panel-toggle" aria-controls="panel" aria-expanded="true">Desk</button>
+
+    <aside id="panel" aria-label="Architect's desk">
+      <section>
+        <div class="seg" id="mode-seg" role="group" aria-label="View">
+          <button data-mode="architect" class="on">Architect</button>
+          <button data-mode="walk">Dream Walk</button>
+        </div>
+      </section>
+
+      <section data-only="architect">
+        <h2>Tools</h2>
+        <div class="seg" id="tool-seg" role="group" aria-label="Tool">
+          <button data-tool="fold" class="on" title="Fold (F)">Fold</button>
+          <button data-tool="raise" title="Raise (R)">Raise</button>
+          <button data-tool="orbit" title="Orbit (O)">Orbit</button>
+        </div>
+        <label class="check"><input type="checkbox" id="snap" checked /> Snap creases to streets</label>
+        <label class="check"><input type="checkbox" id="creases" checked /> Show creases</label>
+      </section>
+
+      <section>
+        <h2>Folds <span id="fold-count" class="count">0 / 8</span></h2>
+        <ul id="fold-list"></ul>
+        <div class="row">
+          <button id="undo" title="Undo last fold (Z)">Undo</button>
+          <button id="kick" class="accent" title="The kick (K)">Kick</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Dreamscapes</h2>
+        <div id="presets" class="presets"></div>
+      </section>
+
+      <section>
+        <h2>Dream depth</h2>
+        <div class="seg" id="level-seg" role="group" aria-label="Dream level"></div>
+        <p class="sub" id="level-sub"></p>
+        <label class="slider"><span>Time of day</span><input type="range" id="time" min="0" max="1" step="0.001" /></label>
+        <label class="slider"><span>Projections <b id="crowd-n"></b></span><input type="range" id="crowd" min="0" max="900" step="10" /></label>
+      </section>
+
+      <section>
+        <h2>This dream</h2>
+        <div class="row">
+          <button id="share">Share link</button>
+          <button id="reseed">New city</button>
+        </div>
+        <div class="row">
+          <select id="quality" aria-label="Quality">
+            <option value="auto">Quality: auto</option>
+            <option value="ultra">Ultra</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+          <button id="mute">Sound on</button>
+        </div>
+      </section>
+    </aside>
+
+    <div id="clock" aria-live="off">
+      <div><span class="k">Real</span> <span id="real-time">00:00</span></div>
+      <div><span class="k">Dream</span> <span id="dream-time">00:00</span></div>
+      <div class="dilation" id="dilation">×20</div>
+    </div>
+
+    <div id="stability" title="Dream stability">
+      <span class="k">Stability</span>
+      <div class="bar"><i id="stability-bar"></i></div>
+      <span id="watchers" class="watchers"></span>
+    </div>
+
+    <div id="hint" role="status"></div>
+    <div id="stats"></div>
+    <div id="crosshair" aria-hidden="true"></div>
+    <div id="toast" role="status"></div>
+
+    <div id="touch-ui" aria-label="Touch controls">
+      <button data-touch="jump">Jump</button>
+      <button data-touch="fold">Fold</button>
+      <button data-touch="kick">Kick</button>
+      <button data-touch="wake">Wake</button>
+    </div>
+
+    <div id="pause" class="overlay" hidden>
+      <div class="card">
+        <h2>The dream is paused</h2>
+        <p>Click to keep walking, or wake up to the architect's view.</p>
+        <div class="cta">
+          <button id="resume" class="primary">Keep dreaming</button>
+          <button id="wake">Wake up (Q)</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="intro" class="overlay">
+      <div class="card intro">
+        <p class="kicker">A city you can fold</p>
+        <h1>Inception<br />City</h1>
+        <p class="lede">
+          Every city is a sheet of paper that remembers being a city. Pull its streets up over your head, raise its
+          towers, then walk out into it and climb the curl onto the ceiling of the world.
+        </p>
+        <div class="cta">
+          <button id="go-architect" class="primary">Enter as the Architect</button>
+          <button id="go-walk">Walk the dream</button>
+        </div>
+        <p class="keys">Drag to fold · F fold the street ahead · K the kick · 1–4 dream depth · Tab switch view</p>
+        <p class="fine">Best with sound. Runs in any WebGL2 browser.</p>
+      </div>
+    </div>
+
+    <noscript>Inception City needs JavaScript and WebGL2.</noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

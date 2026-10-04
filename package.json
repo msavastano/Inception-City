@@ -1,0 +1,25 @@
+{
+  "name": "inception-city",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A folding, dreaming city you can bend with your hands and walk through on foot.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "build:single": "npm run build && node scripts/inline-build.mjs",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
+  },
+  "license": "MIT"
+}

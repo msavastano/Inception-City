@@ -19,6 +19,8 @@ import { LEVELS } from './world/themes';
 type Mode = 'architect' | 'walk';
 type QualityName = 'low' | 'medium' | 'high' | 'ultra';
 
+const PUBLIC_URL = 'https://msavastano.github.io/Inception-City/';
+
 const QUALITY: Record<QualityName, { pr: number; shadow: number; extent: number; bloom: boolean; view: number; props: number; chunks: number; crowd: number }> = {
   ultra: { pr: 2, shadow: 4096, extent: 460, bloom: true, view: 1300, props: 650, chunks: 150, crowd: 900 },
   high: { pr: 1.5, shadow: 2048, extent: 380, bloom: true, view: 1050, props: 480, chunks: 120, crowd: 600 },
@@ -449,10 +451,19 @@ export class App implements DreamContext {
     });
     const f = this.folds.serialize();
     if (f) params.set('f', f);
-    const url = `${location.origin}${location.pathname}#${params.toString()}`;
-    history.replaceState(null, '', `#${params.toString()}`);
+    // Inside an embed (or a local file) the page's own address can't carry the dream, so link to the public build.
+    const embedded = window.self !== window.top || !location.protocol.startsWith('http');
+    const base = embedded ? PUBLIC_URL : `${location.origin}${location.pathname}`;
+    const url = `${base}#${params.toString()}`;
+    try {
+      if (!embedded) history.replaceState(null, '', `#${params.toString()}`);
+    } catch {
+      // some sandboxed frames refuse history changes; the copied link is what matters
+    }
     const done = () => this.toast('Dream link copied', 'Anyone who opens it gets this exact city, folded the same way.');
-    navigator.clipboard?.writeText(url).then(done, () => window.prompt('Copy this dream link', url));
+    const failed = () => this.toast('Copy this dream link', url);
+    if (navigator.clipboard) navigator.clipboard.writeText(url).then(done, failed);
+    else failed();
   }
 
   private renderFoldList(): void {

@@ -125,6 +125,8 @@ export class Fold implements FoldShape {
   angle = 0;
   vel = 0;
   removing = false;
+  /** Let go by a kick (or a new city): it unwinds without straining the dream. */
+  released = false;
   constructor(
     public hx: number,
     public hz: number,
@@ -151,8 +153,12 @@ export class FoldStack {
   readonly uA = new Float32Array(MAX_FOLDS * 4);
   readonly uB = new Float32Array(MAX_FOLDS * 4);
   count = 0;
-  /** Sum of |angular velocity| this frame: drives audio rumble and dream instability. */
+  /** Sum of |angular velocity| this frame: drives the audio rumble. */
   motion = 0;
+  /** Like motion, but only for folds the dream still holds (not released ones): drives dream instability. */
+  strain = 0;
+  /** Total |angle| of the active folds the dream still holds, in half turns: sets the instability floor. */
+  load = 0;
   /** Incremented whenever folds are added or removed (cheap change detection). */
   version = 0;
 
@@ -170,10 +176,11 @@ export class FoldStack {
     fold.target = 0;
   }
 
-  /** Unfold everything (the kick). */
+  /** Unfold everything (the kick). The dream lets go, so the unwinding costs no stability. */
   clear(stiffness?: number): void {
     for (const f of this.folds) {
       this.remove(f);
+      f.released = true;
       if (stiffness) f.stiffness = stiffness;
     }
   }
@@ -192,6 +199,7 @@ export class FoldStack {
 
   update(dt: number): void {
     let motion = 0;
+    let strain = 0;
     for (const f of this.folds) {
       const k = f.stiffness;
       const acc = k * k * (f.target - f.angle) - 2 * k * f.vel;
@@ -202,14 +210,17 @@ export class FoldStack {
         f.vel = 0;
       }
       motion += Math.abs(f.vel);
+      if (!f.released) strain += Math.abs(f.vel);
     }
     const before = this.folds.length;
     this.folds = this.folds.filter((f) => !(f.removing && f.angle === 0));
     if (this.folds.length !== before) this.version++;
     this.motion = motion;
+    this.strain = strain;
 
     this.active = sortFolds(this.folds.filter((f) => f.angle !== 0)).slice(0, MAX_FOLDS);
     this.count = this.active.length;
+    this.load = this.active.reduce((s, f) => (f.released ? s : s + Math.abs(f.angle)), 0) / Math.PI;
     this.uA.fill(0);
     this.uB.fill(0);
     this.active.forEach((f, i) => {

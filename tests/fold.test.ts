@@ -122,6 +122,37 @@ describe('FoldStack', () => {
     expect(stack.count).toBe(0);
   });
 
+  it('a kick unwinds the city without straining the dream', () => {
+    const stack = new FoldStack();
+    for (const hz of [192, -192]) stack.add(0, hz, 0, Math.sign(hz), Math.PI, 50);
+    for (let i = 0; i < 600; i++) stack.update(1 / 60);
+    expect(stack.load).toBeCloseTo(2, 3);
+    stack.clear(3.2);
+    let moved = 0;
+    for (let i = 0; i < 900; i++) {
+      stack.update(1 / 60);
+      moved = Math.max(moved, stack.motion);
+      expect(stack.strain).toBe(0);
+      expect(stack.load).toBe(0);
+    }
+    // the city still visibly (and audibly) unwinds
+    expect(moved).toBeGreaterThan(1);
+  });
+
+  it('unfolding a single fold by hand still strains the dream', () => {
+    const stack = new FoldStack();
+    const f = stack.add(0, 100, 0, 1, Math.PI, 80);
+    for (let i = 0; i < 600; i++) stack.update(1 / 60);
+    stack.remove(f);
+    let strained = 0;
+    for (let i = 0; i < 60; i++) {
+      stack.update(1 / 60);
+      strained = Math.max(strained, stack.strain);
+    }
+    expect(strained).toBeGreaterThan(1);
+    expect(stack.load).toBeGreaterThan(0);
+  });
+
   it('round-trips through its share-link form', () => {
     const a = new FoldStack();
     a.add(10, 128, 0, 1, 3.14159, 90);

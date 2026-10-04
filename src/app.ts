@@ -613,10 +613,9 @@ export class App implements DreamContext {
     this.streamer.update(this.camera.position, focus.x, focus.z, this.folds.active, this.folds.folds, view, q.props, this.time);
 
     // Dream stability.
-    const load = this.folds.active.reduce((s, f) => s + Math.abs(f.angle), 0) / Math.PI;
-    const floor = Math.min(0.45, load * 0.09) + level.limbo * 0.12;
+    const floor = Math.min(0.45, this.folds.load * 0.09) + level.limbo * 0.12;
     this.instability = Math.max(floor, this.instability - dt * 0.03);
-    this.instability = Math.min(1, this.instability + this.folds.motion * dt * 0.07);
+    this.instability = Math.min(1, this.instability + this.folds.strain * dt * 0.07);
 
     // inside the hallway the dreamer is out of the projections' reach
     const dreamer = this.mode === 'walk' && !this.hallway.rider ? focus : null;

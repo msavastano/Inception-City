@@ -3,6 +3,7 @@ import { FoldStack } from '../core/fold';
 import { CityStreamer } from '../city/streamer';
 import { DreamAudio } from '../fx/audio';
 import { Picker } from '../fx/picking';
+import { Hallway } from '../world/hallway';
 
 /** What the interaction modes need from the app. */
 export interface DreamContext {
@@ -12,6 +13,7 @@ export interface DreamContext {
   readonly streamer: CityStreamer;
   readonly picker: Picker;
   readonly audio: DreamAudio;
+  readonly hallway: Hallway;
   readonly time: number;
   snap: boolean;
   /** A fold was finished by the user (for sound, instability and UI). */

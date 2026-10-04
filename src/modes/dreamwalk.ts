@@ -1,12 +1,15 @@
 import * as THREE from 'three';
 import { BLOCK, streetHalfWidth } from '../core/config';
-import { foldPoint } from '../core/fold';
+import { Fold, foldPoint } from '../core/fold';
+import { HALL_LENGTH, Hallway } from '../world/hallway';
 import { DreamContext } from './context';
+import { rideSpec } from './ride';
 
 const EYE = 1.65;
 const RADIUS = 0.35;
 const WALK = 5.5;
 const SPRINT = 13;
+const WALK_HINT = 'WASD walk · Shift run · Space jump · F fold ahead · V drop it · E ride the fold · H the hallway · K kick · Esc pause';
 
 /**
  * First person. The walker lives entirely in flat fabric space: movement,
@@ -38,6 +41,8 @@ export class DreamWalk {
   private basis = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
   private targetQ = new THREE.Quaternion();
   private m = new THREE.Matrix4();
+  private rideFold: Fold | null = null;
+  private jumpQueued = false;
   onPause: (() => void) | null = null;
   fov = 74;
 
@@ -56,7 +61,7 @@ export class DreamWalk {
     });
     document.addEventListener('pointerlockerror', () => {
       this.dragLook = true;
-      this.ctx.hint('Drag to look around. WASD to walk, Shift to run, Space to jump. F folds the street ahead, K is the kick.');
+      this.ctx.hint('Drag to look around. WASD to walk, Shift to run, Space to jump. F folds the street ahead, E rides it, H the hallway, K the kick.');
     });
     document.addEventListener('mousemove', (e) => {
       if (this.active && this.locked) this.look(e.movementX, e.movementY);
@@ -126,6 +131,7 @@ export class DreamWalk {
 
   /** Put the dreamer on the nearest sidewalk to a fabric point, facing along the street. */
   enter(fx: number, fz: number): void {
+    this.ctx.hallway.release();
     const lx = Math.round(fx / BLOCK);
     const lz = Math.round(fz / BLOCK);
     const dx = Math.abs(fx - lx * BLOCK);
@@ -150,11 +156,12 @@ export class DreamWalk {
     this.pitch = 0.08;
     this.active = true;
     this.transition = { p0: this.ctx.camera.position.clone(), q0: this.ctx.camera.quaternion.clone(), t: 0, dur: 1.8 };
-    this.ctx.hint('WASD to walk · Shift to run · Space to jump · F fold the street ahead · V drop it away · K the kick · Esc to pause');
+    this.ctx.hint(WALK_HINT);
     this.lock();
   }
 
   exit(): void {
+    this.leaveHallway();
     this.active = false;
     this.keys.clear();
     if (document.pointerLockElement) document.exitPointerLock();
@@ -162,6 +169,7 @@ export class DreamWalk {
 
   /** Fold the street ahead of the dreamer (up and over with up = true, down into a cliff otherwise). */
   foldAhead(up: boolean): void {
+    if (this.inHallway()) return;
     const fx = Math.sin(this.yaw);
     const fz = Math.cos(this.yaw);
     const alongX = Math.abs(fx) > Math.abs(fz);
@@ -174,6 +182,95 @@ export class DreamWalk {
     const hz = alongX ? this.z : line * BLOCK;
     this.ctx.folds.add(hx, hz, nx, nz, up ? Math.PI : -Math.PI * 0.55, up ? 85 : 40, 2.6);
     this.ctx.foldCommitted(up ? 1 : 0.6);
+  }
+
+  /** Fold the street under the dreamer so it carries them up and over the city. Again to come back down. */
+  ride(): void {
+    if (this.inHallway()) return;
+    const folds = this.ctx.folds;
+    const f = this.rideFold;
+    if (f && !f.removing && folds.folds.includes(f)) {
+      folds.remove(f);
+      this.rideFold = null;
+      this.ctx.hint('The street lowers you back down.');
+      return;
+    }
+    const r = rideSpec(this.x, this.z, this.yaw);
+    this.rideFold = folds.add(r.hx, r.hz, r.nx, r.nz, r.target, r.radius, 1.3);
+    this.ctx.foldCommitted(0.8);
+    this.ctx.hint('Hold on. The street under you is folding up and over the city. Press E to come back down.');
+  }
+
+  jump(): void {
+    if (this.ctx.hallway.rider) this.jumpQueued = true;
+    else if (this.h <= 0) this.vh = 7.5;
+  }
+
+  /** Raise the rotating hallway around the dreamer, or let it go. */
+  toggleHallway(): void {
+    const hall = this.ctx.hallway;
+    if (hall.open) {
+      this.collapseHallway();
+      this.ctx.hint(WALK_HINT);
+      return;
+    }
+    const fx = Math.sin(this.yaw);
+    const fz = Math.cos(this.yaw);
+    const alongX = Math.abs(fx) > Math.abs(fz);
+    const sign = (alongX ? Math.sign(fx) : Math.sign(fz)) || 1;
+    // centre it on the street the dreamer is on, starting just behind them
+    const cross = alongX ? this.z : this.x;
+    const line = Math.round(cross / BLOCK) * BLOCK;
+    const centreCross = Math.abs(cross - line) < 14 ? line : cross;
+    const centreAlong = (alongX ? this.x : this.z) + sign * (HALL_LENGTH / 2 - 6);
+    const cx = alongX ? centreAlong : centreCross;
+    const cz = alongX ? centreCross : centreAlong;
+    const { axis, across } = Hallway.directions(alongX);
+    const [ax, az] = axis;
+    const [kx, kz] = across;
+    const bz = (this.x - cx) * ax + (this.z - cz) * az;
+    const bx = (this.x - cx) * kx + (this.z - cz) * kz;
+    hall.spawn(cx, cz, alongX, bz);
+    hall.update(0, this.ctx.time, this.ctx.folds.active);
+    hall.capture(bx, bz);
+    this.vh = 0;
+    this.h = 0;
+    this.startTransition(0.5);
+    this.ctx.foldCommitted(0.5);
+    this.ctx.hint('The hallway turns with the dream above, and in here gravity is real. Run along the walls. Walk out of an end, or press H to let it go.');
+  }
+
+  /** Let the hallway go, dropping the dreamer back onto the street if they were inside. */
+  collapseHallway(): void {
+    this.leaveHallway();
+    this.ctx.hallway.dismiss();
+  }
+
+  private inHallway(): boolean {
+    if (!this.ctx.hallway.rider) return false;
+    this.ctx.hint('The hallway keeps its own gravity. Walk out of an end to fold the street again.');
+    return true;
+  }
+
+  /** Step out of the hallway onto the street, wherever the dreamer is. */
+  private leaveHallway(): void {
+    const r = this.ctx.hallway.release();
+    if (!r) return;
+    this.x = r.x;
+    this.z = r.z;
+    this.h = r.h;
+    this.vh = r.vh;
+    this.vx = r.vx;
+    this.vz = r.vz;
+    const c = this.ctx.streamer.collide(this.x, this.z, RADIUS);
+    this.x = c.x;
+    this.z = c.z;
+    this.startTransition(0.35);
+  }
+
+  private startTransition(dur: number): void {
+    if (!this.active) return;
+    this.transition = { p0: this.ctx.camera.position.clone(), q0: this.ctx.camera.quaternion.clone(), t: 0, dur };
   }
 
   /** Where the dreamer's eyes are and how they're oriented, after folding. */
@@ -205,47 +302,83 @@ export class DreamWalk {
     }
     const sprint = k.has('ShiftLeft') || k.has('ShiftRight') || (this.touchMove ? Math.hypot(f, s) > 0.95 : false);
     const speed = sprint ? SPRINT : WALK;
-    const fwx = Math.sin(this.yaw);
-    const fwz = Math.cos(this.yaw);
-    const rx = -Math.cos(this.yaw);
-    const rz = Math.sin(this.yaw);
-    let dx = fwx * f + rx * s;
-    let dz = fwz * f + rz * s;
-    const dl = Math.hypot(dx, dz);
-    if (dl > 1) {
-      dx /= dl;
-      dz /= dl;
-    }
-    const grounded = this.h <= 0;
-    const accel = grounded ? 10 : 2;
-    this.vx += (dx * speed - this.vx) * Math.min(1, dt * accel);
-    this.vz += (dz * speed - this.vz) * Math.min(1, dt * accel);
-    const c = this.ctx.streamer.collide(this.x + this.vx * dt, this.z + this.vz * dt, RADIUS);
-    this.x = c.x;
-    this.z = c.z;
+    const jump = k.has('Space') || this.jumpQueued;
+    this.jumpQueued = false;
 
-    if (grounded && k.has('Space')) this.vh = 7.5;
-    if (this.h > 0 || this.vh > 0) {
-      this.vh -= 22 * dt;
-      this.h += this.vh * dt;
-      if (this.h <= 0) {
-        this.h = 0;
-        this.vh = 0;
+    const hall = this.ctx.hallway;
+    let grounded: boolean;
+    let moving: number;
+    if (hall.rider) {
+      const out = hall.step(dt, f, s, speed, jump, this.yaw - hall.axisYaw);
+      if (hall.landed) {
+        hall.landed = false;
         this.ctx.audio.step();
+      }
+      const fab = hall.riderFabric();
+      if (fab) {
+        this.x = fab.x;
+        this.z = fab.z;
+      }
+      grounded = !!hall.rider && hall.rider.face >= 0;
+      moving = hall.rider ? hall.rider.pace : 0;
+      if (out) {
+        this.leaveHallway();
+        this.ctx.hint(WALK_HINT);
+      }
+    } else {
+      const fwx = Math.sin(this.yaw);
+      const fwz = Math.cos(this.yaw);
+      const rx = -Math.cos(this.yaw);
+      const rz = Math.sin(this.yaw);
+      let dx = fwx * f + rx * s;
+      let dz = fwz * f + rz * s;
+      const dl = Math.hypot(dx, dz);
+      if (dl > 1) {
+        dx /= dl;
+        dz /= dl;
+      }
+      grounded = this.h <= 0;
+      const accel = grounded ? 10 : 2;
+      this.vx += (dx * speed - this.vx) * Math.min(1, dt * accel);
+      this.vz += (dz * speed - this.vz) * Math.min(1, dt * accel);
+      const c = this.ctx.streamer.collide(this.x + this.vx * dt, this.z + this.vz * dt, RADIUS);
+      this.x = c.x;
+      this.z = c.z;
+
+      if (grounded && jump) this.vh = 7.5;
+      if (this.h > 0 || this.vh > 0) {
+        this.vh -= 22 * dt;
+        this.h += this.vh * dt;
+        if (this.h <= 0) {
+          this.h = 0;
+          this.vh = 0;
+          this.ctx.audio.step();
+        }
+      }
+      moving = Math.hypot(this.vx, this.vz);
+
+      // walking into an open end of the hallway takes you inside
+      const into = hall.entering(this.x, this.z, this.vx, this.vz);
+      if (into) {
+        hall.capture(into.x, into.z);
+        this.startTransition(0.6);
+        this.ctx.hint('Inside the hallway gravity is real. Run along the walls as it turns. Walk out of an end, or press H to let it go.');
       }
     }
 
-    const moving = Math.hypot(this.vx, this.vz);
     if (grounded && moving > 0.5) {
       const before = Math.floor(this.stepPhase / Math.PI);
       this.stepPhase += dt * moving * 1.35;
       if (Math.floor(this.stepPhase / Math.PI) !== before) this.ctx.audio.step();
     }
     this.bob = grounded ? Math.abs(Math.sin(this.stepPhase)) * 0.06 * Math.min(1, moving / WALK) : 0;
-    this.fov += ((sprint && moving > 7 ? 84 : 74) - this.fov) * Math.min(1, dt * 4);
+    // the world rushes past while a fold carries you
+    const carried = this.rideFold && this.ctx.folds.folds.includes(this.rideFold) ? Math.min(1, Math.abs(this.rideFold.vel) * 2.5) : 0;
+    this.fov += ((sprint && moving > 7 ? 84 : 74) + carried * 12 - this.fov) * Math.min(1, dt * 4);
 
     const cam = this.ctx.camera;
-    this.pose(this.eye, this.targetQ);
+    if (hall.rider) hall.pose(this.yaw - hall.axisYaw, this.pitch, this.eye, this.targetQ, this.bob);
+    else this.pose(this.eye, this.targetQ);
     if (this.transition) {
       const t = this.transition;
       t.t = Math.min(1, t.t + dt / t.dur);

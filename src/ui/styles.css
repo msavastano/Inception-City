@@ -1,14 +1,17 @@
 :root {
   --bg: #0b0d12;
-  --glass: rgba(12, 14, 20, 0.62);
-  --glass-strong: rgba(10, 12, 17, 0.86);
-  --line: rgba(255, 255, 255, 0.1);
-  --text: #e9e6df;
-  --muted: #9a9890;
+  /* HUD text sits on plates, never straight on the city, so it stays readable over sky, snow or night */
+  --glass: rgba(10, 12, 17, 0.78);
+  --glass-strong: rgba(8, 10, 14, 0.9);
+  --line: rgba(255, 255, 255, 0.14);
+  --text: #f1eee7;
+  --soft: #d9d5cb;
+  --muted: #b5b1a6;
+  --halo: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 14px rgba(0, 0, 0, 0.75);
   --accent: #d9b26f;
   --accent-ink: #1b1508;
   --cold: #8fc3e8;
-  --danger: #e0584a;
+  --danger: #f2705f;
   --radius: 10px;
   --font: 'Helvetica Neue', Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   color-scheme: dark;
@@ -16,11 +19,11 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --glass: rgba(10, 12, 17, 0.64);
+    --glass: rgba(10, 12, 17, 0.8);
   }
 }
 :root[data-theme='dark'] {
-  --glass: rgba(10, 12, 17, 0.64);
+  --glass: rgba(10, 12, 17, 0.8);
 }
 
 * {
@@ -93,6 +96,18 @@ button.primary {
   font-weight: 600;
 }
 
+#brand,
+#clock,
+#stability,
+#stats,
+#toast {
+  background: var(--glass-strong);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  text-shadow: var(--halo);
+}
+
 #brand {
   position: fixed;
   top: 14px;
@@ -100,6 +115,8 @@ button.primary {
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 6px 16px 6px 8px;
+  border-radius: 12px;
   pointer-events: none;
   z-index: 5;
 }
@@ -108,7 +125,6 @@ button.primary {
   font-size: 15px;
   letter-spacing: 0.34em;
   text-transform: uppercase;
-  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.6);
 }
 .level-name {
   font-size: 12px;
@@ -116,7 +132,6 @@ button.primary {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   margin-top: 3px;
-  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7);
 }
 
 #panel-toggle {
@@ -125,7 +140,7 @@ button.primary {
 
 #panel {
   position: fixed;
-  top: 100px;
+  top: 106px;
   left: 16px;
   width: 268px;
   max-height: calc(100vh - 160px);
@@ -270,10 +285,12 @@ select option {
   top: 14px;
   right: 16px;
   text-align: right;
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 1.45;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
-  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7);
+  padding: 8px 12px;
+  border-radius: 10px;
   pointer-events: none;
   z-index: 5;
 }
@@ -281,7 +298,7 @@ select option {
 #stability .k {
   color: var(--muted);
   text-transform: uppercase;
-  font-size: 10px;
+  font-size: 10.5px;
   letter-spacing: 0.2em;
   margin-right: 4px;
 }
@@ -292,19 +309,21 @@ select option {
 
 #stability {
   position: fixed;
-  top: 76px;
+  top: 100px;
   right: 16px;
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
+  font-size: 11.5px;
+  padding: 7px 12px;
+  border-radius: 10px;
   pointer-events: none;
   z-index: 5;
 }
 #stability .bar {
   width: 96px;
-  height: 4px;
-  background: rgba(255, 255, 255, 0.15);
+  height: 5px;
+  background: rgba(255, 255, 255, 0.2);
   border-radius: 2px;
   overflow: hidden;
 }
@@ -317,7 +336,10 @@ select option {
 }
 .watchers {
   color: var(--danger);
-  min-width: 1em;
+  font-weight: 600;
+}
+.watchers:empty {
+  display: none;
 }
 
 #hint {
@@ -327,11 +349,12 @@ select option {
   transform: translateX(-50%);
   max-width: min(720px, calc(100vw - 32px));
   text-align: center;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--text);
-  background: var(--glass);
+  background: var(--glass-strong);
   border: 1px solid var(--line);
   border-radius: 999px;
+  text-shadow: var(--halo);
   padding: 8px 16px;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -350,7 +373,9 @@ select option {
   font-size: 10.5px;
   line-height: 1.5;
   text-align: right;
-  color: var(--muted);
+  color: var(--soft);
+  padding: 6px 10px;
+  border-radius: 8px;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
   z-index: 5;
@@ -365,7 +390,8 @@ select option {
   height: 6px;
   margin: -3px 0 0 -3px;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.35);
   pointer-events: none;
   display: none;
   z-index: 4;
@@ -391,7 +417,8 @@ body.walk [data-only='architect'] {
   letter-spacing: 0.24em;
   text-transform: uppercase;
   text-align: center;
-  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.8);
+  padding: 14px 26px;
+  border-radius: 14px;
   max-width: calc(100vw - 32px);
   opacity: 0;
   pointer-events: none;
@@ -399,7 +426,6 @@ body.walk [data-only='architect'] {
     opacity 0.5s,
     transform 0.5s;
   z-index: 8;
-  max-width: calc(100vw - 32px);
 }
 #toast.show {
   opacity: 1;
@@ -411,7 +437,7 @@ body.walk [data-only='architect'] {
   font-weight: 400;
   letter-spacing: 0.08em;
   text-transform: none;
-  color: var(--muted);
+  color: var(--soft);
   margin-top: 8px;
   overflow-wrap: anywhere;
 }
@@ -421,17 +447,17 @@ body.walk [data-only='architect'] {
   right: 16px;
   bottom: 70px;
   display: none;
-  flex-direction: column;
+  grid-template-columns: repeat(2, 76px);
   gap: 8px;
   z-index: 6;
 }
 #touch-ui button {
-  width: 68px;
+  width: 76px;
   height: 44px;
   background: var(--glass-strong);
 }
 body.walk.touch #touch-ui {
-  display: flex;
+  display: grid;
 }
 
 .overlay {
@@ -467,6 +493,9 @@ body.walk.touch #touch-ui {
   line-height: 1.55;
   font-size: 14px;
 }
+#intro {
+  background: radial-gradient(ellipse at center, rgba(5, 6, 9, 0.8) 0%, rgba(5, 6, 9, 0.62) 60%, rgba(5, 6, 9, 0.82) 100%);
+}
 .intro {
   background: transparent;
   border: 0;
@@ -481,7 +510,7 @@ body.walk.touch #touch-ui {
   text-transform: uppercase;
   margin: 8px 0 18px;
   font-weight: 800;
-  text-shadow: 0 6px 40px rgba(0, 0, 0, 0.6);
+  text-shadow: var(--halo), 0 6px 40px rgba(0, 0, 0, 0.6);
 }
 .kicker {
   color: var(--accent) !important;
@@ -495,7 +524,7 @@ body.walk.touch #touch-ui {
   font-size: 16px !important;
   max-width: 470px;
   margin: 0 auto 22px;
-  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.8);
+  text-shadow: var(--halo);
 }
 .cta {
   display: flex;
@@ -508,12 +537,14 @@ body.walk.touch #touch-ui {
   font-size: 14px;
 }
 .keys {
-  font-size: 12px !important;
+  font-size: 12.5px !important;
+  color: var(--soft) !important;
   margin-top: 20px;
+  text-shadow: var(--halo);
 }
 .fine {
   font-size: 11.5px !important;
-  opacity: 0.7;
+  opacity: 0.85;
   margin: 4px 0 0;
 }
 
@@ -541,7 +572,10 @@ body.walk.touch #touch-ui {
     display: none;
   }
   #stability {
-    top: 70px;
+    top: 92px;
+  }
+  #brand {
+    padding-right: 12px;
   }
   #hint {
     border-radius: 12px;
@@ -552,6 +586,7 @@ body.walk.touch #touch-ui {
   }
 }
 
+body.intro #brand,
 body.intro #panel,
 body.intro #panel-toggle,
 body.intro #clock,

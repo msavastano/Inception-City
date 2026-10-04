@@ -14,6 +14,8 @@ export interface Preset {
   name: string;
   blurb: string;
   folds: FoldSpec[];
+  /** Raise the rotating hallway here (fabric centre, and whether it runs along x). */
+  hallway?: { x: number; z: number; alongX: boolean };
   camera: { pos: [number, number, number]; target: [number, number, number] };
 }
 
@@ -72,5 +74,13 @@ export const PRESETS: Preset[] = [
       { hx: -192, hz: 0, nx: -1, nz: 0, angle: PI / 2, radius: 50 },
     ],
     camera: { pos: [-110, 150, -140], target: [70, 110, 170] },
+  },
+  {
+    id: 'hallway',
+    name: 'The Hallway',
+    blurb: 'A hotel corridor turns like a barrel on the boulevard. Walk in at either end.',
+    folds: [],
+    hallway: { x: 0, z: 150, alongX: false },
+    camera: { pos: [9, 9, 86], target: [0, 6, 150] },
   },
 ];

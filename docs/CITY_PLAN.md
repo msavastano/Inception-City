@@ -47,7 +47,7 @@ Boulevards carry plane trees. Every street has lamps on both sides at a fixed rh
 ## 3. The rules of the dream
 
 1. **Streets are hinges.** Any street can become a fold line. A fold has a hinge, a direction, an angle and a radius. Up to eight folds can be alive at once.
-2. **Gravity follows the fabric.** Anything standing on the city (a dreamer, a projection, a tree) is attached to the sheet. Walk towards a fold and the road simply rises ahead of you into a wall and then a ceiling, and you keep walking.
+2. **Gravity follows the fabric.** Anything standing on the city (a dreamer, a projection, a tree) is attached to the sheet. Walk towards a fold and the road simply rises ahead of you into a wall and then a ceiling, and you keep walking. The one exception is the rotating hallway (4.3): inside it, gravity points down at the real ground, and the corridor turns around you.
 3. **Paper physics.** Parallel folds nest: a fold further from the Circus is carried along by a nearer one, like rolling up a carpet. Crossing folds cut the sheet the way you cut the corners out of paper before folding it into a box, so nothing has to stretch.
 4. **The dream pushes back.** Every fold costs stability. Fast, violent folding costs more. The totem wobbles, the picture shakes and splits into colour fringes, and the projections start to stare.
 5. **Projections defend the dreamer's mind.** Calm projections walk the sidewalks. As stability falls they stop and turn to look at you. When it collapses they hunt. If they reach you, you are kicked out.
@@ -76,12 +76,13 @@ The architect looks down on the city like a model on a table.
 - **Fold:** press on a street and drag. The hinge forms under your cursor, perpendicular to the direction you drag. The further you drag, the further it bends, up to 180°. With *Snap creases to streets* on, the hinge locks to the nearest street and the direction locks to the grid. Hold Shift to fold downwards into the ground.
 - **Raise:** paint over blocks to grow or shrink buildings. Edits stick to the block even when it streams out and back in.
 - **Orbit:** a plain camera, for looking without touching anything.
-- **Dreamscapes:** five presets that each make a point about the fold algebra.
+- **Dreamscapes:** six presets that each make a point about the fold algebra, or break it.
   - *The Paris Fold:* the film's shot. Half the city hangs overhead.
   - *Double Fold:* two opposite curls, two skies made of streets.
   - *The Scroll:* four nested quarter-folds roll the city up like a carpet.
   - *Escher Steps:* alternating up and down folds turn districts into a staircase.
   - *City in a Box:* four walls stand up, and the crossing-fold cut keeps the corners clean.
+  - *The Hallway:* a hotel corridor turning like a barrel on the boulevard. Walk in at either end.
 - **Fold list:** every fold is listed with its direction and a live angle slider, so you can sculpt after the fact. Undo removes the newest fold.
 - **Share:** the whole dream (seed, level, time, folds and quality) fits in the URL hash, so a link reproduces exactly what you see.
 
@@ -92,11 +93,30 @@ The dreamer is dropped onto a sidewalk at street level.
 - WASD or arrows to walk, Shift to run, Space to jump. Mouse look with pointer lock, or drag to look where pointer lock is not available.
 - **F** folds the street ahead of you upwards, so you can watch the road rise into a wall and then walk up it.
 - **V** drops the street ahead away into a downward fold.
+- **E** rides the fold: the street you are standing on folds up and over the city and carries you with it, until you hang upside down 96 m above the districts behind you. **E** again lowers you back down.
+- **H** raises the rotating hallway around you on the nearest street. Press it again, or kick, to let it go.
 - **K** is the kick. **Q** wakes you up into architect mode. **Esc** pauses.
-- On touch screens, a left-thumb stick walks, dragging anywhere else looks, and on-screen buttons jump, fold, kick and wake.
+- On touch screens, a left-thumb stick walks, dragging anywhere else looks, and on-screen buttons jump, fold, ride, raise the hallway, kick and wake.
 - Buildings, trees, lamps and the monument are solid. Footsteps follow your pace.
 
 Switching between the two (Tab) is a camera flight, not a cut: the architect's view swoops down to the dreamer's eye, and back up again.
+
+### 4.3 The rotating hallway
+
+The hotel corridor from the film: 7 m square, 64 m long, red carpet, doors every 8 m. It rises out of the street, hangs with its axis just high enough that its corners clear the ground, and turns like a barrel. The spin is not steady. It follows a few incommensurate sine waves, so it surges and slackens like a van swerving on the level above.
+
+It is the one place where gravity does not follow the fabric. The dreamer inside is simulated in the corridor's own frame with real gravity pointing at the ground:
+
+- **Three frames.** Fabric (where the corridor sits on the sheet), the corridor frame carried through any folds at the corridor's centre (so a hallway on a folded street hangs at the fold's angle), and spin space, the corridor frame turned by the current angle, in which the walls never move.
+- **Walls carry you.** A wall you stand on moves you with it exactly, so a slow turn walks you up the floor. Static friction holds until the floor tilts past about 31°, then you slide into the corner and onto the next wall, which becomes the floor.
+- **The camera follows the wall.** The view's up eases toward the wall you are standing on, so the corridor stays steady and the world outside the open ends turns instead. In the air it swings back toward the real sky.
+- **Ends are open.** Walk out of either end and you drop back onto the street, carrying your speed. Walk into an open end and the corridor takes you in.
+
+The physics is pinned by `tests/hallway.test.ts`: standing still, a minute of tumbling that never leaves the walls and visits all four, the grip-then-slide angle, and walking out.
+
+### 4.4 Riding the fold
+
+**E** turns the fold algebra into a lift. The hinge goes on the first street at least π·48 + 12 m behind you, with the page facing forward and a 48 m radius. That distance matters: everything closer than π·R to the hinge is wrapped around the curl, everything beyond it is the rigid page. So you never ride the bend itself; you stand on a flat street that swings up and over like a turning page, and at 180° you are upside down at exactly 2R = 96 m, looking up at the city below. The fold uses a slower spring than F, the field of view widens while it moves, and gravity following the fabric means you can walk around up there.
 
 ---
 
@@ -214,7 +234,7 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 
 ## 7. Where it goes next
 
-### Milestone 1: the playable dream (this release)
+### Milestone 1: the playable dream (done)
 - Endless procedural Paris with five districts and the Circus monument
 - Architect mode with folds, raise brush, five dreamscapes and shareable links
 - Dream Walk with fabric-space physics, walking up curls and the kick
@@ -222,14 +242,17 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 - The projections crowd and the stability system
 - Procedural audio, bloom and grade, adaptive quality, touch controls
 
+### Milestone 1.1: the hallway and the ride (this release)
+- The rotating hallway, with its own physics and a dreamscape
+- Riding the fold: the street you stand on carries you over the city
+- Solid plates behind all HUD text so it reads over any sky or street
+
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
 - See other dreamers as projections that do not turn on you.
 - The architect and the dreamer as two different people: one folds the city while the other walks it.
 
 ### Milestone 3: deeper physics
-- Fold animation driven by the dreamer: fold the street you are standing on and ride it up.
-- Rotating corridors: a fold whose angle keeps turning, so the hallway fight works.
 - Mirror bridges: a fold of exactly 180° with zero radius that copies the street onto itself as a reflective arch.
 - Projection crowds that react to each other as well as to you.
 
@@ -253,7 +276,8 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/city/pool.ts` | The slab allocator for instanced attributes |
 | `src/city/streamer.ts` | World-space streaming, LOD, collision and raise-brush edits |
 | `src/world/` | Sky, sun and weather, dream levels, the projections crowd |
-| `src/modes/` | Architect controls, Dream Walk controls, presets |
+| `src/world/hallway.ts` | The rotating hallway: geometry, shader painter and the rider's physics |
+| `src/modes/` | Architect controls, Dream Walk controls, presets, the ride fold (`ride.ts`) |
 | `src/fx/` | GPU picking, procedural audio, post-processing |
 | `src/ui/` | Styles and the HUD totem |
-| `tests/` | Fold algebra and generator tests |
+| `tests/` | Fold algebra, generator, hallway and ride tests |

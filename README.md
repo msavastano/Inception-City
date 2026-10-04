@@ -6,7 +6,7 @@
 
 ![The Paris Fold: half the city hangs upside down over the Circus and its spinning-top monument](docs/images/paris.jpg)
 
-Inception City is an endless, procedurally generated Paris printed on a sheet of fabric. Every street is a hinge. Grab the city and fold it until whole districts hang upside down in the sky, then drop to street level and walk up the curl and onto the ceiling, because in a dream gravity follows the street. Fold too hard and the dream's projections turn to stare at you. Go deeper and time stretches, snow falls, and in Limbo the city crumbles into the sea.
+Inception City is an endless, procedurally generated Paris printed on a sheet of fabric. Every street is a hinge. Grab the city and fold it until whole districts hang upside down in the sky, then drop to street level and walk up the curl and onto the ceiling, because in a dream gravity follows the street. Ride a folding street up over the city, or step into the hotel corridor that turns like a barrel. Fold too hard and the dream's projections turn to stare at you. Go deeper and time stretches, snow falls, and in Limbo the city crumbles into the sea.
 
 It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is downloaded but code: every facade, cobble, cloud and sound is generated from a seed.
 
@@ -15,6 +15,10 @@ It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is
 | ![First person on a boulevard, the street rising ahead into the sky](docs/images/walk-street.jpg) | ![First person at the base of a curl, the road bending upward into a wall](docs/images/walk-curl.jpg) |
 | **City in a Box** | **The Scroll** |
 | ![Four edges of the city folded up into walls around the centre](docs/images/box.jpg) | ![Four nested folds roll the city into a cylinder overhead, its glowing underside visible](docs/images/scroll.jpg) |
+| **The rotating hallway** | **Inside, standing on the wall** |
+| ![A hotel corridor hanging tilted over the boulevard, turning like a barrel](docs/images/hallway-street.jpg) | ![Inside the corridor, turned on its side: the carpet is a wall and the doors are underfoot](docs/images/hallway-inside.jpg) |
+| **Riding the fold** | **At the top** |
+| ![Mid-ride: the street behind curls up and over, a park hanging overhead](docs/images/ride-curl.jpg) | ![Upside down 96 m up, looking up at the city below](docs/images/ride-top.jpg) |
 
 ![The Paris Fold at night, thousands of lit windows overhead](docs/images/night.jpg)
 
@@ -24,13 +28,15 @@ It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is
 
 - **Fold:** press on a street and drag. The hinge forms under the cursor, and the further you drag, the further the city bends, up to a full 180°. Creases snap to streets. Hold Shift to fold downwards.
 - **Raise:** paint over blocks to grow or shrink the buildings.
-- **Dreamscapes:** five one-click compositions: *The Paris Fold*, *Double Fold*, *The Scroll*, *Escher Steps* and *City in a Box*.
+- **Dreamscapes:** six one-click compositions: *The Paris Fold*, *Double Fold*, *The Scroll*, *Escher Steps*, *City in a Box* and *The Hallway*.
 - **Sculpt after the fact:** every fold has its own angle slider, and Undo removes the newest.
 - **Share:** the whole dream (seed, level, time of day and folds) fits in the link.
 
 **Dream Walk** puts you on the sidewalk in first person.
 
 - Walk and run through the streets, and fold the street ahead of you to watch the road rise into a wall, then climb it.
+- **Ride the fold (E):** the street you are standing on folds up and over the city and carries you with it, until you hang upside down 96 m above the districts behind you.
+- **The rotating hallway (H):** a hotel corridor rises around you and turns like a barrel. Its walls carry you up until you slide onto the next one, so you end up running along the walls and the ceiling. Walk out of either end to get back to the street.
 - Trees, lamps, buildings and the monument are solid. The projections walk the sidewalks with you.
 - Press K for the kick: every fold collapses at once with a ripple and a BRAAAM, and you wake up a level.
 
@@ -49,11 +55,11 @@ It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is
 | --- | --- | --- |
 | Move | Right-drag to orbit, middle-drag to pan, scroll to zoom (the Orbit tool puts orbit on the left button) | WASD or arrows, Shift to run, Space to jump |
 | Look | Same as move | Mouse (click to capture it), or drag |
-| Fold | Drag across a street with the Fold tool (F) | F folds the street ahead up, V drops it away |
-| Other | R raise brush, O orbit, Z undo, double-click to fly to a spot | Esc to pause, Q to wake up |
+| Fold | Drag across a street with the Fold tool (F) | F folds the street ahead up, V drops it away, E rides the street you stand on |
+| Other | R raise brush, O orbit, Z undo, H the Hallway dreamscape, double-click to fly to a spot | H raises or lets go of the rotating hallway, Esc to pause, Q to wake up |
 | Anywhere | Tab switches mode, K is the kick, 1 to 4 pick the level, M mutes | |
 
-On touch screens: in architect mode one finger folds or paints (or orbits with the Orbit tool) and two fingers zoom and pan. In Dream Walk a left-thumb stick walks, dragging anywhere else looks, and buttons jump, fold, kick and wake.
+On touch screens: in architect mode one finger folds or paints (or orbits with the Orbit tool) and two fingers zoom and pan. In Dream Walk a left-thumb stick walks, dragging anywhere else looks, and buttons jump, fold, ride, raise the hallway, kick and wake.
 
 ### Link parameters
 
@@ -68,6 +74,7 @@ The short version: **everything is simulated on the flat sheet, and folding happ
 - **Streaming after folding.** Chunks are chosen by their distance *after* folding, so the districts hanging overhead are loaded even though they are far away on the sheet.
 - **No textures.** Facades, roofs, streets, parks, snow, wet sheen, crease lines and the glowing underside of a fold are all painted procedurally in shaders.
 - **GPU picking.** Clicking on a folded city renders a single pixel of fabric coordinates under the cursor, so a fold can start on a wall or a ceiling.
+- **One exception to the rule.** Inside the rotating hallway, gravity points at the real ground. The dreamer is simulated in the corridor's own spinning frame, with friction that holds until the floor tilts past about 31°, and the camera's up eases toward whichever wall is underfoot. See [`src/world/hallway.ts`](src/world/hallway.ts).
 - **Adaptive quality.** Four tiers trade resolution, shadows, bloom, view distance and crowd size, chosen from the device and adjusted to hold the frame rate.
 
 The [city plan](docs/CITY_PLAN.md) covers the districts, the rules of the dream, the full fold algebra, the scaling strategy and the roadmap (multiplayer through a shared fold log, WebGPU and WebXR).
@@ -77,7 +84,7 @@ The [city plan](docs/CITY_PLAN.md) covers the districts, the rules of the dream,
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm test             # fold algebra and generator tests
+npm test             # fold algebra, generator and hallway tests
 npm run build        # static site in dist/
 npm run build:single # one self-contained HTML file in dist-single/
 ```
@@ -90,11 +97,11 @@ Built with TypeScript, [Three.js](https://threejs.org) and [Vite](https://vite.d
 src/
   core/    fold algebra, grid constants, seeded noise
   city/    chunk generator, shaders, materials, slab allocator, streamer
-  world/   sky and weather, dream levels, the projections crowd
-  modes/   architect, dream walk, dreamscape presets
+  world/   sky and weather, dream levels, the projections crowd, the rotating hallway
+  modes/   architect, dream walk, riding the fold, dreamscape presets
   fx/      GPU picking, procedural audio, post-processing
   ui/      styles and the HUD totem
-tests/     fold and generator tests
+tests/     fold, generator, hallway and ride tests
 docs/      the city plan and screenshots
 ```
 

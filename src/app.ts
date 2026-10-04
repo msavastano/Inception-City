@@ -13,6 +13,7 @@ import { DreamWalk } from './modes/dreamwalk';
 import { PRESETS, Preset } from './modes/presets';
 import { Totem } from './ui/totem';
 import { Environment } from './world/environment';
+import { HALL_LENGTH, Hallway } from './world/hallway';
 import { Projections } from './world/projections';
 import { LEVELS } from './world/themes';
 
@@ -63,6 +64,7 @@ export class App implements DreamContext {
   readonly architect: ArchitectMode;
   readonly walk: DreamWalk;
   readonly crowd: Projections;
+  readonly hallway = new Hallway();
   private totem: Totem;
   time = 0;
   snap = true;
@@ -126,6 +128,7 @@ export class App implements DreamContext {
       }
     };
     this.scene.add(this.crowd.mesh);
+    this.scene.add(this.hallway.mesh);
 
     this.post = new PostFX(this.renderer, this.scene, this.camera, mobile || this.quality === 'low' ? 0 : 4);
     this.architect = new ArchitectMode(this);
@@ -180,6 +183,7 @@ export class App implements DreamContext {
 
   kick(reason?: string): void {
     this.audio.kick();
+    if (this.hallway.active) this.walk.collapseHallway();
     const f = this.focus();
     U.uRipple.value.set(f.x, f.z, this.time, 7);
     this.folds.clear(3.2);
@@ -210,6 +214,13 @@ export class App implements DreamContext {
       const hit = this.picker.pick(this.camera, r.left + r.width / 2, r.top + r.height / 2);
       const t = this.architect.controls.target;
       this.walk.enter(hit ? hit.x : t.x, hit ? hit.z : t.z);
+      if (this.hallway.open) {
+        // start a few steps from the hallway's open end, facing in
+        const [ax, az] = this.hallway.axis;
+        this.walk.x = this.hallway.cx - ax * (HALL_LENGTH / 2 + 8);
+        this.walk.z = this.hallway.cz - az * (HALL_LENGTH / 2 + 8);
+        this.walk.yaw = this.hallway.axisYaw;
+      }
     } else {
       const fromWalk = this.walk.active;
       this.walk.exit();
@@ -245,6 +256,9 @@ export class App implements DreamContext {
   }
 
   applyPreset(p: Preset): void {
+    if (this.hallway.rider) this.walk.collapseHallway();
+    if (p.hallway) this.hallway.spawn(p.hallway.x, p.hallway.z, p.hallway.alongX);
+    else this.hallway.dismiss();
     for (const f of this.folds.live()) this.folds.remove(f);
     for (const s of p.folds) this.folds.add(s.hx, s.hz, s.nx, s.nz, s.angle, s.radius, 2.4);
     if (this.mode === 'architect') {
@@ -263,6 +277,7 @@ export class App implements DreamContext {
     }
     this.architect.finishFlight();
     this.walk.finishTransition();
+    this.hallway.settle();
     this.env.applyInstant();
     if (this.pendingPreset) {
       this.applyPreset(this.pendingPreset);
@@ -388,8 +403,10 @@ export class App implements DreamContext {
     for (const b of document.querySelectorAll<HTMLButtonElement>('#touch-ui button')) {
       b.addEventListener('click', () => {
         const a = b.dataset.touch;
-        if (a === 'jump' && this.walk.h <= 0) this.walk.vh = 7.5;
+        if (a === 'jump') this.walk.jump();
         if (a === 'fold') this.walk.foldAhead(true);
+        if (a === 'ride') this.walk.ride();
+        if (a === 'hall') this.walk.toggleHallway();
         if (a === 'kick') this.kick();
         if (a === 'wake') this.setMode('architect');
       });
@@ -433,6 +450,14 @@ export class App implements DreamContext {
           break;
         case 'KeyQ':
           if (this.mode === 'walk') this.setMode('architect');
+          break;
+        case 'KeyE':
+          if (this.mode === 'walk') this.walk.ride();
+          break;
+        case 'KeyH':
+          if (this.mode === 'walk') this.walk.toggleHallway();
+          else if (this.hallway.open) this.hallway.dismiss();
+          else this.applyPreset(PRESETS.find((p) => p.hallway) ?? PRESETS[0]);
           break;
       }
     });
@@ -555,6 +580,8 @@ export class App implements DreamContext {
       this.renderFoldList();
     }
 
+    this.hallway.update(dt, this.time, this.folds.active);
+
     if (!this.started) {
       const a = this.time * 0.05;
       this.camera.position.set(Math.sin(a) * 560, 280 + Math.sin(a * 0.7) * 40, Math.cos(a) * 560);
@@ -591,13 +618,16 @@ export class App implements DreamContext {
     this.instability = Math.max(floor, this.instability - dt * 0.03);
     this.instability = Math.min(1, this.instability + this.folds.motion * dt * 0.07);
 
-    this.crowd.update(dt, focus.x, focus.z, this.mode === 'walk' ? focus : null, this.instability, (x, z, r) => this.streamer.collide(x, z, r));
+    // inside the hallway the dreamer is out of the projections' reach
+    const dreamer = this.mode === 'walk' && !this.hallway.rider ? focus : null;
+    this.crowd.update(dt, focus.x, focus.z, dreamer, this.instability, (x, z, r) => this.streamer.collide(x, z, r));
 
     const fw = new THREE.Vector3();
     if (this.mode === 'walk') fw.copy(this.camera.position);
     else fw.copy(this.architect.controls.target);
     this.env.update(dt, this.camera, fw, q.extent);
-    this.audio.update(this.folds.motion, level.drone, this.instability);
+    const turning = this.hallway.rider ? Math.abs(this.hallway.spin) * 0.45 : 0;
+    this.audio.update(this.folds.motion + turning, level.drone, this.instability);
 
     // Finishing.
     this.flash *= Math.exp(-dt * 2.5);

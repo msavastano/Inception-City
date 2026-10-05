@@ -22,11 +22,12 @@ type QualityName = 'low' | 'medium' | 'high' | 'ultra';
 
 const PUBLIC_URL = 'https://msavastano.github.io/Inception-City/';
 
-const QUALITY: Record<QualityName, { pr: number; shadow: number; extent: number; bloom: boolean; view: number; props: number; chunks: number; crowd: number }> = {
-  ultra: { pr: 2, shadow: 4096, extent: 460, bloom: true, view: 1300, props: 650, chunks: 150, crowd: 900 },
-  high: { pr: 1.5, shadow: 2048, extent: 380, bloom: true, view: 1050, props: 480, chunks: 120, crowd: 600 },
-  medium: { pr: 1, shadow: 2048, extent: 320, bloom: true, view: 820, props: 360, chunks: 90, crowd: 400 },
-  low: { pr: 0.75, shadow: 0, extent: 260, bloom: false, view: 620, props: 240, chunks: 60, crowd: 180 },
+// mirror: resolution of the wet-street reflection as a fraction of the screen (0 = lamp glints only)
+const QUALITY: Record<QualityName, { pr: number; shadow: number; extent: number; bloom: boolean; view: number; props: number; chunks: number; crowd: number; mirror: number }> = {
+  ultra: { pr: 2, shadow: 4096, extent: 460, bloom: true, view: 1300, props: 650, chunks: 150, crowd: 900, mirror: 0.5 },
+  high: { pr: 1.5, shadow: 2048, extent: 380, bloom: true, view: 1050, props: 480, chunks: 120, crowd: 600, mirror: 0.5 },
+  medium: { pr: 1, shadow: 2048, extent: 320, bloom: true, view: 820, props: 360, chunks: 90, crowd: 400, mirror: 0.35 },
+  low: { pr: 0.75, shadow: 0, extent: 260, bloom: false, view: 620, props: 240, chunks: 60, crowd: 180, mirror: 0 },
 };
 const ORDER: QualityName[] = ['low', 'medium', 'high', 'ultra'];
 const MAX_CHUNKS = 150;
@@ -531,6 +532,7 @@ export class App implements DreamContext {
     this.renderer.setPixelRatio(pr);
     this.post.setSize(window.innerWidth, window.innerHeight, pr);
     this.post.bloom.enabled = q.bloom;
+    this.env.mirrorScale = q.mirror;
     this.streamer.limit = q.chunks;
     const sun = this.env.sun;
     sun.castShadow = q.shadow > 0;

@@ -59,11 +59,11 @@ Boulevards carry plane trees. Every street has lamps on both sides at a fixed rh
 | Level | Name | Dream seconds per real second | Mood |
 | --- | --- | --- | --- |
 | 1 | The City | 20 | Clear Paris morning, warm stone, saturated grade |
-| 2 | Rain | 400 | Dusk, wet reflective streets, cold grade, autumn trees, restless crowd |
+| 2 | Rain | 400 | Dusk, wet streets and puddles that mirror the city, cold grade, autumn trees, restless crowd |
 | 3 | Snow | 8,000 | White silence, snow on every roof and pavement, a lower drone |
 | 4 | Limbo | ∞ | Washed-out colour, falling ash, a city crumbling into the sea |
 
-Each level has its own palette for day and night, weather, colour grade and ambient drone pitch. The time-of-day slider runs from noon to midnight on every level, and at night roughly a third of the windows light up.
+Each level has its own palette for day and night, weather, colour grade and ambient drone pitch. The time-of-day slider runs from noon to midnight on every level, and at night roughly a third of the windows light up. Up close each lit window opens onto a room (5.5).
 
 ---
 
@@ -182,6 +182,25 @@ Ray casting against a folded city on the CPU would mean folding every vertex twi
 
 ---
 
+### 5.5 Rooms behind the windows
+
+Walk past a lit window and you see into a room: back wall, side walls, floor and a ceiling lamp, all shifting with parallax, with no geometry behind the facade at all. This is interior mapping. The facade shader already knows which window cell a pixel belongs to, so it also knows where that pixel sits on the room's window wall. The view ray is traced from there into a box the size of the room (a flat is two windows wide and one storey tall, an office one bay of curtain wall), and whichever face it reaches first is painted: wallpaper, floorboards, a framed picture, a bookcase or a door, a pendant lamp lighting the room with a simple falloff. A cut-out card across the middle of the room carries the furniture (a sofa, a table and chairs, a floor lamp, desks with glowing monitors in offices, a counter in shops), and curtains, sheers and blinds hang in the window itself. Now and then a projection stands at a window, looking out.
+
+Folding is no obstacle. The vertex shader carries the fabric axes through the same fold rotations as the normal, so it can hand the fragment shader the view ray expressed in fabric space, where every building is still an axis-aligned box. A room on a curled street looks right from the street below it.
+
+Every choice (which rooms are lit, which have a television on, the wallpaper, the furniture) comes from hashing the room's id and the building's seed. Interpolation would wobble the seed's last bits and the hashes would turn that into speckle, so per-building values are passed as `flat` varyings. Once a window is only a few pixels wide the room fades back to the flat warm pane it was before.
+
+### 5.6 Wet streets
+
+In the Rain the street is a mirror. Each frame the scene is rendered a second time from the camera's reflection below the street, at a fraction of the screen's resolution, with an oblique near plane (Lengyel's trick) that cuts away the street and everything under it. The ground shader projects its own world position into that image and uses it in place of the sky-only environment reflection, weighted by a generous Fresnel term:
+
+- **Puddles** gather where a low-frequency noise dips and along the kerbs. They are darker, nearly mirror-smooth, and ripple with expanding rings where raindrops land.
+- **Wet asphalt and paving** reflect through the render target's mipmaps and a vertical smear, so lamps and lit windows stretch into the long streaks of a wet night.
+- **Folded streets** are not level, so they keep the plain reflection. Only street that is flat and at ground height uses the mirror.
+- **Limbo's sea** reflects what is left of the city.
+
+The mirror costs a second pass over the city's geometry, so it scales with the quality tier (6.7) and fades out above about 160 m, where the street is seen too steeply to reflect much. Without it (on Low, or from high above), the street lamps' reflections are traced analytically instead: the reflected view ray is followed up to lantern height in fabric space, and its distance from the nearest lamps on both kerbs becomes a streak, long towards the viewer and narrow across.
+
 ## 6. Scaling
 
 The goal is a city that is effectively infinite, foldable in real time, and still smooth on a phone. Each of the decisions below exists to keep one cost constant as the city grows.
@@ -204,12 +223,12 @@ The result is about eleven draw calls for the whole city, whether it has two tho
 
 - **Ground tiles** come in two tessellations. Only chunks crossed by a curl get the fine 40 × 40 grid needed to bend smoothly. Everywhere else a 2 × 2 tile is enough.
 - **Props** (trees and lamps) are only written for chunks inside a smaller ring around the viewer, with their own budget per frame.
-- **Facades** fade their window pattern to its average colour once a window is only a few pixels wide, which removes moiré without textures or mipmaps.
+- **Facades** fade their window pattern to its average colour once a window is only a few pixels wide, which removes moiré without textures or mipmaps. The rooms behind the windows are only traced while a window is big enough on screen to show one.
 - **The crowd** is a single instanced mesh. Its size follows the quality tier, from 180 to 900 people.
 
 ### 6.5 No textures
 
-All surface detail comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, snow cover, wet sheen, crosswalks, park paths, lamp pools, glowing crease lines and the glowing lattice on the underside of a fold. The build ships no image assets at all. The whole app, including the 3D engine, is about 680 kB of JavaScript (about 180 kB gzipped).
+All surface detail comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, the rooms behind the windows, snow cover, puddles and raindrop ripples, crosswalks, park paths, lamp pools, glowing crease lines and the glowing lattice on the underside of a fold. The build ships no image assets at all. The whole app, including the 3D engine, is about 720 kB of JavaScript (about 190 kB gzipped).
 
 ### 6.6 Bounded fold cost
 
@@ -217,14 +236,14 @@ Fold state is two arrays of eight vec4 uniforms. Every vertex pays for at most e
 
 ### 6.7 Adaptive quality
 
-Four tiers (low, medium, high, ultra) set pixel ratio, shadow map size and extent, bloom, view distance, prop distance, chunk cap and crowd size. The app starts from a guess based on the device and then watches the frame rate, stepping down a tier when it drops below about 38 fps and back up (as far as High) when it holds above 57 fps. Ultra is opt-in from the panel, and `#q=` in the URL pins any tier.
+Four tiers (low, medium, high, ultra) set pixel ratio, shadow map size and extent, bloom, the wet-street mirror's resolution, view distance, prop distance, chunk cap and crowd size. The app starts from a guess based on the device and then watches the frame rate, stepping down a tier when it drops below about 38 fps and back up (as far as High) when it holds above 57 fps. Ultra is opt-in from the panel, and `#q=` in the URL pins any tier.
 
-| Tier | Pixel ratio | Shadows | Bloom | View distance | Chunk cap | Crowd |
-| --- | --- | --- | --- | --- | --- | --- |
-| Ultra | 2 | 4096 | yes | 1300 m | 150 | 900 |
-| High | 1.5 | 2048 | yes | 1050 m | 120 | 600 |
-| Medium | 1 | 2048 | yes | 820 m | 90 | 400 |
-| Low | 0.75 | off | no | 620 m | 60 | 180 |
+| Tier | Pixel ratio | Shadows | Bloom | Wet-street mirror | View distance | Chunk cap | Crowd |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Ultra | 2 | 4096 | yes | ½ resolution | 1300 m | 150 | 900 |
+| High | 1.5 | 2048 | yes | ½ resolution | 1050 m | 120 | 600 |
+| Medium | 1 | 2048 | yes | ⅓ resolution | 820 m | 90 | 400 |
+| Low | 0.75 | off | no | lamp reflections only | 620 m | 60 | 180 |
 
 ### 6.8 State that fits in a link
 
@@ -242,10 +261,14 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 - The projections crowd and the stability system
 - Procedural audio, bloom and grade, adaptive quality, touch controls
 
-### Milestone 1.1: the hallway and the ride (this release)
+### Milestone 1.1: the hallway and the ride (done)
 - The rotating hallway, with its own physics and a dreamscape
 - Riding the fold: the street you stand on carries you over the city
 - Solid plates behind all HUD text so it reads over any sky or street
+
+### Milestone 1.2: close-up realism (this release)
+- Rooms behind the windows, traced in the facade shader, with lamps, curtains and furniture
+- Wet streets in the Rain: the city mirrored in puddles and smeared across wet asphalt, rippled by raindrops
 
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
@@ -278,6 +301,6 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/world/` | Sky, sun and weather, dream levels, the projections crowd |
 | `src/world/hallway.ts` | The rotating hallway: geometry, shader painter and the rider's physics |
 | `src/modes/` | Architect controls, Dream Walk controls, presets, the ride fold (`ride.ts`) |
-| `src/fx/` | GPU picking, procedural audio, post-processing |
+| `src/fx/` | GPU picking, procedural audio, post-processing, the wet-street mirror (`reflection.ts`) |
 | `src/ui/` | Styles and the HUD totem |
-| `tests/` | Fold algebra, generator, hallway and ride tests |
+| `tests/` | Fold algebra, generator, hallway, ride and wet-street mirror tests |

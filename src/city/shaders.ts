@@ -19,7 +19,9 @@ vec3 foldRotate(vec3 v, vec2 n, float c, float s) {
   return vec3(v.x - vn * n.x + rn * n.x, vn * s + vu * c, v.z - vn * n.y + rn * n.y);
 }
 
-void applyFolds(vec2 f, inout vec3 p, inout vec3 nrm) {
+// ex and ey are the fabric x and y axes, carried through the same rotations
+// (like foldPoint's basis) so callers can take vectors back into fabric space.
+void applyFoldsFrame(vec2 f, inout vec3 p, inout vec3 nrm, inout vec3 ex, inout vec3 ey) {
   vec2 claim = vec2(0.0);
   for (int i = 0; i < MAX_FOLDS; i++) {
     if (i >= uFoldCount) break;
@@ -40,7 +42,22 @@ void applyFolds(vec2 f, inout vec3 p, inout vec3 nrm) {
     vec3 C = vec3(A.x, sgn * B.y, A.y);
     p = foldRotate(p - vec3(shift * A.z, 0.0, shift * A.w) - C, A.zw, c, s) + C;
     nrm = foldRotate(nrm, A.zw, c, s);
+    ex = foldRotate(ex, A.zw, c, s);
+    ey = foldRotate(ey, A.zw, c, s);
   }
+}
+
+void applyFolds(vec2 f, inout vec3 p, inout vec3 nrm) {
+  vec3 ex = vec3(1.0, 0.0, 0.0);
+  vec3 ey = vec3(0.0, 1.0, 0.0);
+  applyFoldsFrame(f, p, nrm, ex, ey);
+}
+
+// The camera-to-vertex ray expressed in fabric space (the unfolded sheet), so
+// procedural interiors and reflections can be traced as if nothing were folded.
+vec3 fabricViewRay(vec3 worldP, vec3 ex, vec3 ey) {
+  vec3 v = worldP - cameraPosition;
+  return vec3(dot(ex, v), dot(ey, v), dot(cross(ex, ey), v));
 }
 
 float ripple(vec2 f) {
@@ -76,16 +93,19 @@ attribute vec4 iColor; // rgb, seed
 attribute vec2 iAnim;  // height multiplier (architect brush), birth time
 varying vec3 vLocal;
 varying vec3 vObjN;
-varying vec4 vColor;
-varying vec4 vInfo;    // style, seed, extra, height
+// Per-building constants are flat: interpolation would wobble their last bits,
+// and the hashes that pick lit rooms and furniture would turn that into speckle.
+flat varying vec4 vColor;
+flat varying vec4 vInfo;    // style, seed, extra, height
 varying vec3 vFabric;
+varying vec3 vViewF;   // camera-to-surface ray in fabric space (for the rooms behind the windows)
 ${FOLD_GLSL}
 
 void buildingVertex(out vec3 P, out vec3 N) {
   if (iSize.x <= 0.0) {
     // empty slab slot: collapse to a point and skip the fold loop
     P = vec3(0.0); N = vec3(0.0, 1.0, 0.0);
-    vLocal = P; vObjN = N; vColor = vec4(0.0); vInfo = vec4(0.0); vFabric = P;
+    vLocal = P; vObjN = N; vColor = vec4(0.0); vInfo = vec4(0.0); vFabric = P; vViewF = N;
     return;
   }
   float style = iPos.w;
@@ -124,20 +144,42 @@ void buildingVertex(out vec3 P, out vec3 N) {
   vFabric = fab;
   P = fab;
   N = nrm;
-  applyFolds(fab.xz, P, N);
+  vec3 ex = vec3(1.0, 0.0, 0.0);
+  vec3 ey = vec3(0.0, 1.0, 0.0);
+  applyFoldsFrame(fab.xz, P, N, ex, ey);
+  vViewF = fabricViewRay((modelMatrix * vec4(P, 1.0)).xyz, ex, ey);
 }
 `;
 
 export const BUILDING_FRAG_HEAD = /* glsl */ `
 varying vec3 vLocal;
 varying vec3 vObjN;
-varying vec4 vColor;
-varying vec4 vInfo;
+flat varying vec4 vColor;
+flat varying vec4 vInfo;
 varying vec3 vFabric;
+varying vec3 vViewF;
 uniform float uNight;
 uniform float uSnow;
 uniform float uTime;
 float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+
+// The room behind the window this pixel belongs to, filled in by facade().
+vec2 gRoom;      // position on the room's window wall: along the wall, above its floor (metres)
+vec3 gRoomSize;  // width, height, depth (metres)
+vec2 gPane;      // position inside the window opening, 0..1
+vec2 gRoomId;    // one id per room, shared by all of its windows
+float gRoomOn;   // brightness of the room's light, 0 when it is dark
+float gRoomKind; // 0 flat, 1 shop, 2 office, 3 attic
+float gLod;      // 1 when windows are only a few pixels wide
+
+void setRoom(float along, float width, float y, float height, float depth, vec2 pane, vec2 id, float on, float kind) {
+  gRoom = vec2(mod(along, width), y);
+  gRoomSize = vec3(width, height, depth);
+  gPane = pane;
+  gRoomId = id;
+  gRoomOn = on;
+  gRoomKind = kind;
+}
 
 // Paints one facade cell. Returns window mask, lit amount and glassiness.
 void facade(inout vec3 col, out float win, out float lit, out float glassy, out vec3 litCol) {
@@ -145,7 +187,8 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
   float seed = vInfo.y;
   vec3 an = abs(vObjN);
   col = vColor.rgb;
-  win = 0.0; lit = 0.0; glassy = 0.0;
+  win = 0.0; lit = 0.0; glassy = 0.0; gLod = 0.0;
+  setRoom(0.0, 1.0, 0.0, 1.0, 1.0, vec2(0.0), vec2(0.0), 0.0, 0.0);
   litCol = mix(vec3(1.0, 0.72, 0.42), vec3(1.0, 0.9, 0.75), hash12(vec2(seed * 91.0, 3.0)));
 
   if (style > 8.5) {
@@ -159,6 +202,7 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
         win = dormer;
         vec2 id = vec2(floor(u / 3.3 + seed), 99.0 + seed * 13.0);
         lit = dormer * step(hash12(id), 0.28);
+        setRoom(cell * 3.3, 3.3, vLocal.y - 0.3, 2.9, 3.6, vec2((cell - 0.36) / 0.28, (vLocal.y - 0.9) / 2.1), id, lit * 0.8, 3.0);
         col = mix(col, vec3(0.92, 0.94, 0.98), uSnow * 0.85);
       } else {
         col = mix(col, vec3(0.95, 0.96, 1.0), uSnow);
@@ -179,6 +223,8 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
   float u = (an.x > 0.5 ? vLocal.z : vLocal.x) + 400.0;
   float v = vLocal.y;
   float H = vInfo.w;
+  // a few rooms per building are offices, whatever the facade
+  float office = step(0.7, hash12(vec2(seed * 41.0, 5.0)));
 
   if (style < 0.5) {
     // Haussmann limestone: shopfront, iron balconies, tall windows, cornice.
@@ -197,6 +243,7 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
       win = glass;
       // shop interiors: dimmer than the flats above, brighter towards the ceiling
       lit = glass * (0.16 + 0.4 * pick) * (0.45 + 0.55 * smoothstep(0.25, 3.3, v));
+      setRoom(u, 4.2, v, 4.0, 6.5, vec2((bay - 0.12) / 0.76, (v - 0.25) / 3.05), vec2(floor(u / 4.2), seed * 31.0), 0.3 + 0.5 * pick, 1.0);
       col = mix(col, vec3(0.08, 0.08, 0.09), glass);
     } else {
       float level = floor((v - shopH) / fh);
@@ -210,8 +257,12 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
       col = mix(col, vec3(0.12, 0.13, 0.14), w);
       col = mix(col, vec3(0.06, 0.06, 0.07), balcony);
       win = w;
-      float on = hash12(vec2(floor(u / 3.0), level) + seed * 57.0);
-      lit = w * step(on, 0.42) * (0.4 + on * 1.4) * (0.6 + 0.4 * smoothstep(0.55, 2.75, fv));
+      // a flat is two windows wide, and its lights are on or off together
+      vec2 id = vec2(floor(u / 6.0), level) + seed * 57.0;
+      float on = hash12(id);
+      float bright = step(on, 0.42) * (0.4 + on * 1.4);
+      lit = w * bright * (0.6 + 0.4 * smoothstep(0.55, 2.75, fv));
+      setRoom(u, 6.0, fv, fh, 4.5 + 2.0 * hash12(id + 7.0), vec2((cu - 0.3) / 0.42, (fv - 0.55) / 2.2), id, bright, 0.0);
     }
   } else if (style < 1.5) {
     // Glass curtain wall.
@@ -223,9 +274,12 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
     win = mul * (1.0 - spandrel);
     glassy = 1.0;
     col = mix(col * 0.55, col * 0.35, win);
-    float on = hash12(vec2(floor(u / 6.4), level) + seed * 13.0);
-    lit = win * step(on, 0.33) * (0.4 + on * 1.8);
+    vec2 id = vec2(floor(u / 6.4), level) + seed * 13.0;
+    float on = hash12(id);
+    float bright = step(on, 0.33) * (0.4 + on * 1.8);
+    lit = win * bright;
     litCol = mix(litCol, vec3(0.75, 0.88, 1.0), 0.6);
+    setRoom(u, 6.4, fv - 0.7, fh - 0.7, 8.0, vec2(fract(u / 1.6), (fv - 0.7) / (fh - 0.7)), id, bright, 2.0);
   } else if (style < 2.5) {
     // Modernist concrete: ribbon windows.
     float fh = 3.6;
@@ -236,8 +290,12 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
     win = band * mul;
     col *= 0.9 + 0.1 * hash12(floor(vec2(u * 0.5, v * 0.5)) + seed);
     col = mix(col, vec3(0.1, 0.12, 0.14), win);
-    float on = hash12(vec2(floor(u / 5.4), level) + seed * 7.0);
-    lit = win * step(on, 0.35) * (0.4 + on * 1.7);
+    vec2 id = vec2(floor(u / 5.4), level) + seed * 7.0;
+    float on = hash12(id);
+    float bright = step(on, 0.35) * (0.4 + on * 1.7);
+    lit = win * bright;
+    if (office > 0.5) litCol = mix(litCol, vec3(0.8, 0.9, 1.0), 0.5);
+    setRoom(u, 5.4, fv, fh - 0.3, 5.5 + 2.0 * office, vec2(fract(u / 1.8), (fv - 1.0) / 1.9), id, bright, 2.0 * office);
   } else {
     // Old-town brick.
     float fh = 3.1;
@@ -251,8 +309,11 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
     col = mix(col, vec3(0.88, 0.86, 0.8), trim);
     col = mix(col, vec3(0.1, 0.1, 0.11), w);
     win = w;
-    float on = hash12(vec2(floor(u / 2.7), level) + seed * 23.0);
-    lit = w * step(on, 0.45) * (0.4 + on * 1.3);
+    vec2 id = vec2(floor(u / 5.4), level) + seed * 23.0;
+    float on = hash12(id);
+    float bright = step(on, 0.45) * (0.4 + on * 1.3);
+    lit = w * bright;
+    setRoom(u, 5.4, fv, fh - 0.1, 4.0 + 1.5 * hash12(id + 3.0), vec2((cu - 0.32) / 0.36, (fv - 0.7) / 1.7), id, bright, 0.0);
   }
   // grime towards the street
   col *= 0.82 + 0.18 * smoothstep(0.0, 9.0, v);
@@ -262,6 +323,209 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
   col = mix(col, avg, lod);
   win *= 1.0 - lod * 0.6;
   lit *= 1.0 - lod * 0.5;
+  gLod = lod;
+}
+
+float box2(vec2 p, vec2 lo, vec2 hi) { return step(lo.x, p.x) * step(p.x, hi.x) * step(lo.y, p.y) * step(p.y, hi.y); }
+
+// Furniture, seen as a cut-out card standing across the middle of the room.
+// Returns coverage and writes its colour and how much it glows on its own.
+float furniture(vec2 c, float s, out vec3 fc, out float glow) {
+  vec3 S = gRoomSize;
+  fc = vec3(0.16, 0.13, 0.11);
+  glow = 0.0;
+  float m = 0.0;
+  if (gRoomKind > 1.5 && gRoomKind < 2.5) {
+    // office: rows of desks with glowing monitors
+    float cell = fract(c.x / 1.6);
+    float desk = step(0.68, c.y) * step(c.y, 0.76) + step(c.y, 0.68) * step(abs(cell - 0.5), 0.03) * 2.0;
+    float screen = box2(vec2(cell, c.y), vec2(0.3, 0.84), vec2(0.7, 1.18));
+    fc = mix(vec3(0.22), vec3(0.6, 0.75, 1.0), screen);
+    glow = screen * 1.6;
+    m = clamp(desk + screen, 0.0, 1.0);
+  } else if (gRoomKind > 0.5 && gRoomKind < 1.5) {
+    // shop: a counter and a display table
+    m = box2(c, vec2(0.4, 0.0), vec2(S.x * 0.45, 1.0)) + box2(c, vec2(S.x * 0.6, 0.0), vec2(S.x - 0.4, 0.75));
+    fc = mix(vec3(0.3, 0.2, 0.12), vec3(0.6, 0.55, 0.45), step(0.92, c.y) * step(c.x, S.x * 0.45));
+  } else if (gRoomKind < 0.5) {
+    float pick = fract(s * 7.13);
+    float a = 0.4 + fract(s * 3.7) * max(S.x - 2.8, 0.1);
+    if (pick < 0.45) {
+      // a sofa
+      m = box2(c, vec2(a, 0.12), vec2(a + 2.0, 0.5)) + box2(c, vec2(a + 0.1, 0.5), vec2(a + 1.9, 0.88))
+        + box2(c, vec2(a - 0.05, 0.12), vec2(a + 0.2, 0.66)) + box2(c, vec2(a + 1.8, 0.12), vec2(a + 2.05, 0.66));
+      vec3 cloth[4];
+      cloth[0] = vec3(0.32, 0.1, 0.08); cloth[1] = vec3(0.12, 0.2, 0.16); cloth[2] = vec3(0.24, 0.22, 0.2); cloth[3] = vec3(0.12, 0.14, 0.26);
+      int ci = int(floor(fract(s * 11.3) * 3.999));
+      fc = cloth[0];
+      if (ci == 1) fc = cloth[1]; else if (ci == 2) fc = cloth[2]; else if (ci == 3) fc = cloth[3];
+    } else if (pick < 0.75) {
+      // a table with a chair either side
+      m = box2(c, vec2(a, 0.72), vec2(a + 1.3, 0.79)) + box2(c, vec2(a + 0.08, 0.0), vec2(a + 0.14, 0.72)) + box2(c, vec2(a + 1.16, 0.0), vec2(a + 1.22, 0.72))
+        + box2(c, vec2(a - 0.5, 0.0), vec2(a - 0.44, 1.0)) + box2(c, vec2(a - 0.5, 0.44), vec2(a - 0.1, 0.5))
+        + box2(c, vec2(a + 1.74, 0.0), vec2(a + 1.8, 1.0)) + box2(c, vec2(a + 1.4, 0.44), vec2(a + 1.8, 0.5));
+      fc = vec3(0.3, 0.19, 0.11);
+    }
+    // a floor lamp in some rooms
+    if (fract(s * 5.9) < 0.35) {
+      float lx = S.x - 0.6;
+      float shade = box2(c, vec2(lx - 0.22 + (c.y - 1.45) * 0.3, 1.45), vec2(lx + 0.22 - (c.y - 1.45) * 0.3, 1.75));
+      float pole = box2(c, vec2(lx - 0.02, 0.0), vec2(lx + 0.02, 1.45));
+      if (shade + pole > 0.5) { fc = mix(vec3(0.1), vec3(1.0, 0.85, 0.6), shade); glow = shade * 2.5 * step(0.01, gRoomOn); }
+      m += shade + pole;
+    }
+    // now and then someone stands looking out: a projection, watching the street
+    if (fract(s * 17.7) < 0.07 && gRoomOn > 0.0) {
+      float px = S.x * (0.3 + 0.4 * fract(s * 23.1));
+      float body = step(abs(c.x - px), 0.2 - 0.06 * smoothstep(1.0, 1.45, c.y)) * step(c.y, 1.5);
+      float head = step(length(vec2(c.x - px, c.y - 1.64)), 0.12);
+      if (body + head > 0.5) { fc = vec3(0.03); glow = 0.0; }
+      m += body + head;
+    }
+  }
+  return clamp(m, 0.0, 1.0);
+}
+
+// Interior mapping: the window is a hole into a box-shaped room, traced along
+// the view ray so walls, floor, ceiling and furniture shift with parallax as you
+// walk past. Returns the surface's colour and writes how strongly the room's own
+// light (lamp) and the daylight through the window (day) fall on it.
+vec3 roomInterior(vec3 rd, out float lamp, out float day) {
+  vec3 S = gRoomSize;
+  vec3 o = vec3(gRoom, 0.0);
+  vec3 r = vec3(rd.x < 0.0 ? min(rd.x, -1e-4) : max(rd.x, 1e-4), rd.y < 0.0 ? min(rd.y, -1e-4) : max(rd.y, 1e-4), max(rd.z, 1e-4));
+  vec3 t3 = (step(0.0, r) * S - o) / r;
+  float t = min(min(t3.x, t3.y), t3.z);
+  vec3 h = o + r * t;
+  float s = hash12(gRoomId * 1.37 + 0.5);
+
+  bool office = gRoomKind > 1.5 && gRoomKind < 2.5;
+  bool shop = gRoomKind > 0.5 && gRoomKind < 1.5;
+  vec3 walls[6];
+  walls[0] = vec3(0.78, 0.7, 0.56); walls[1] = vec3(0.56, 0.62, 0.5); walls[2] = vec3(0.72, 0.54, 0.5);
+  walls[3] = vec3(0.56, 0.62, 0.7); walls[4] = vec3(0.78, 0.62, 0.38); walls[5] = vec3(0.8, 0.78, 0.74);
+  int wi = int(floor(s * 5.999));
+  vec3 wall = walls[5];
+  if (wi == 0) wall = walls[0]; else if (wi == 1) wall = walls[1]; else if (wi == 2) wall = walls[2]; else if (wi == 3) wall = walls[3]; else if (wi == 4) wall = walls[4];
+  if (office) wall = vec3(0.74, 0.75, 0.76);
+  if (shop) wall = fract(s * 4.7) < 0.5 ? vec3(0.36, 0.26, 0.18) : vec3(0.7, 0.68, 0.62);
+  // shops line their walls with shelves of goods
+  float shelfY = 0.0;
+  float stocked = 0.0;
+  vec3 goods = vec3(0.0);
+  if (shop) {
+    shelfY = step(fract(h.y / 0.55), 0.08) * step(h.y, 2.4);
+    vec2 item = floor(vec2(h.x + h.z, h.y) * vec2(5.0, 1.8));
+    goods = mix(vec3(0.45, 0.4, 0.34), vec3(hash12(item + 1.0), hash12(item + 2.0), hash12(item + 3.0)), 0.55) * 0.75;
+    stocked = step(h.y, 2.4) * step(0.35, fract((h.x + h.z) * 5.0)) * 0.8;
+  }
+
+  vec3 alb;
+  vec3 n;
+  float glow = 0.0;
+  if (t3.z <= t3.x && t3.z <= t3.y) {
+    n = vec3(0.0, 0.0, -1.0);
+    alb = wall;
+    float d = fract(s * 13.1);
+    if (shop) {
+      alb = mix(mix(alb, goods, stocked), vec3(0.3, 0.22, 0.15), shelfY);
+    } else if (!office) {
+      if (d < 0.35) {
+        // a framed picture
+        float cx = S.x * (0.3 + 0.4 * fract(s * 5.3));
+        float fr = box2(h.xy, vec2(cx - 0.45, 1.25), vec2(cx + 0.45, 1.95));
+        float art = box2(h.xy, vec2(cx - 0.38, 1.32), vec2(cx + 0.38, 1.88));
+        alb = mix(alb, vec3(0.25, 0.18, 0.08), fr);
+        alb = mix(alb, mix(vec3(0.2, 0.3, 0.45), vec3(0.6, 0.45, 0.25), fract(s * 9.1 + h.y)), art);
+      } else if (d < 0.65) {
+        // a bookcase
+        float bx = S.x * 0.15;
+        float bk = box2(h.xy, vec2(bx, 0.0), vec2(bx + 1.6, 2.2));
+        vec2 book = vec2(floor(h.x * 14.0), floor(h.y / 0.44));
+        vec3 spines = vec3(hash12(book), hash12(book + 4.0), hash12(book + 9.0) * 0.6) * 0.5 + 0.1;
+        float board = step(fract(h.y / 0.44), 0.08);
+        alb = mix(alb, mix(spines, vec3(0.28, 0.18, 0.1), board), bk);
+      } else if (d < 0.8) {
+        // a door
+        float dx = S.x * 0.65;
+        alb = mix(alb, vec3(0.42, 0.3, 0.2), box2(h.xy, vec2(dx, 0.0), vec2(dx + 0.9, 2.1)));
+      }
+    }
+  } else if (t3.y < t3.x) {
+    if (r.y < 0.0) {
+      n = vec3(0.0, 1.0, 0.0);
+      if (office) alb = vec3(0.3, 0.31, 0.33);
+      else if (shop) alb = mix(vec3(0.55, 0.52, 0.48), vec3(0.3, 0.29, 0.28), mod(floor(h.x * 2.0) + floor(h.z * 2.0), 2.0));
+      else alb = vec3(0.36, 0.22, 0.12) * (0.85 + 0.15 * step(0.5, fract(h.z * 2.6 + floor(h.x * 0.9) * 0.37)));
+    } else {
+      n = vec3(0.0, -1.0, 0.0);
+      alb = vec3(0.86, 0.84, 0.8);
+      if (office) {
+        // ceiling light panels
+        vec2 g = fract(h.xz / vec2(1.6, 1.8));
+        glow = box2(g, vec2(0.2, 0.3), vec2(0.8, 0.7)) * 2.4;
+      } else {
+        // the pendant lamp
+        glow = (1.0 - smoothstep(0.12, 0.22, length(h.xz - S.xz * 0.5))) * 6.0;
+      }
+    }
+  } else {
+    n = vec3(r.x < 0.0 ? 1.0 : -1.0, 0.0, 0.0);
+    alb = wall * 0.92;
+    if (shop) alb = mix(mix(alb, goods, stocked), vec3(0.3, 0.22, 0.15), shelfY);
+  }
+
+  // furniture standing across the room
+  float zc = S.z * (0.4 + 0.25 * fract(s * 2.9));
+  float tc = zc / r.z;
+  if (tc < t) {
+    vec2 c = o.xy + r.xy * tc;
+    vec3 fc;
+    float fg;
+    if (c.x > 0.0 && c.x < S.x && furniture(c, s, fc, fg) > 0.5) {
+      h = vec3(c, zc);
+      n = vec3(0.0, 0.0, -1.0);
+      alb = fc;
+      glow = fg;
+    }
+  }
+
+  vec3 L = vec3(S.x * 0.5, S.y - 0.35, S.z * 0.5);
+  vec3 dl = L - h;
+  float dist2 = dot(dl, dl);
+  if (office || shop) lamp = 0.55 + 0.45 * max(dot(n, normalize(dl)), 0.0);
+  else lamp = 0.12 + 2.2 * max(dot(n, normalize(dl)), 0.0) / (1.0 + 0.35 * dist2);
+  lamp += glow;
+  day = (0.25 + 0.75 * exp(-h.z * 0.3)) * (n.y > 0.5 ? 1.2 : 1.0);
+  return alb;
+}
+
+// Curtains, sheers and blinds hang in the window itself. Returns colour and coverage.
+vec4 drapes(vec2 p, float s) {
+  vec4 res = vec4(0.0);
+  if (gRoomKind > 1.5 && gRoomKind < 2.5) {
+    // office blinds, part-way down
+    float down = 1.0 - fract(s * 3.3) * 1.3;
+    float blinds = step(down, p.y) * step(0.3, fract(p.y * 26.0));
+    res = vec4(vec3(0.75, 0.76, 0.74), blinds * 0.9 * step(0.4, fract(s * 8.1)));
+  } else if (gRoomKind < 0.5 || gRoomKind > 2.5) {
+    // Paris sheers
+    if (fract(s * 6.7) < 0.4) res = vec4(vec3(0.92, 0.9, 0.85), 0.3);
+    // heavy drapes, gathered at the sides
+    float drawn = fract(s * 4.1);
+    if (drawn > 0.3) {
+      float wl = 0.1 + 0.28 * fract(s * 9.7);
+      float side = step(p.x, wl) + step(1.0 - wl, p.x);
+      vec3 cols[4];
+      cols[0] = vec3(0.45, 0.08, 0.07); cols[1] = vec3(0.75, 0.68, 0.52); cols[2] = vec3(0.16, 0.3, 0.2); cols[3] = vec3(0.2, 0.22, 0.4);
+      int ci = int(floor(fract(s * 12.7) * 3.999));
+      vec3 dc = cols[0];
+      if (ci == 1) dc = cols[1]; else if (ci == 2) dc = cols[2]; else if (ci == 3) dc = cols[3];
+      dc *= 0.8 + 0.2 * sin(p.x * 70.0);
+      if (side > 0.5) res = vec4(dc, 0.95);
+    }
+  }
+  return res;
 }
 `;
 
@@ -269,6 +533,26 @@ export const BUILDING_FRAG_COLOR = /* glsl */ `
 #include <color_fragment>
 float winMask; float winLit; float glassy; vec3 litCol;
 facade(diffuseColor.rgb, winMask, winLit, glassy, litCol);
+// Far away a lit window is a flat warm pane; up close it opens onto a room.
+vec3 winGlow = litCol * winLit * 1.4 * uNight;
+if (winMask > 0.01 && gLod < 0.98) {
+  vec3 an = abs(vObjN);
+  vec3 rd = vec3(an.x > 0.5 ? vViewF.z : vViewF.x, vViewF.y, -dot(vViewF, vObjN));
+  float lamp; float day;
+  vec3 room = roomInterior(rd, lamp, day);
+  float s = hash12(gRoomId * 1.37 + 0.5);
+  vec3 light = litCol;
+  // a few lit rooms are lit only by a television
+  if (fract(s * 31.3) < 0.1 && gRoomKind < 0.5) light = vec3(0.45, 0.6, 1.0) * (0.55 + 0.45 * sin(uTime * 9.0 + sin(uTime * 2.3) * 4.0));
+  vec3 nightCol = room * (lamp * light * gRoomOn * 1.1 + 0.012);
+  vec3 dayCol = room * day * 0.09;
+  vec4 dr = drapes(clamp(gPane, 0.0, 1.0), s);
+  // backlit curtains glow; seen from outside by day they are just cloth
+  nightCol = mix(nightCol, dr.rgb * (light * gRoomOn * (dr.a < 0.5 ? 0.5 : 0.3) + 0.01), dr.a);
+  dayCol = mix(dayCol, dr.rgb * 0.08, dr.a);
+  vec3 near = (nightCol * uNight + dayCol * (1.0 - uNight)) * winMask;
+  winGlow = mix(near, winGlow, gLod);
+}
 `;
 
 export const BUILDING_FRAG_ROUGH = /* glsl */ `
@@ -281,7 +565,7 @@ metalnessFactor = mix(metalnessFactor, 0.35 + 0.5 * glassy, winMask);
 `;
 export const BUILDING_FRAG_EMISSIVE = /* glsl */ `
 #include <emissivemap_fragment>
-totalEmissiveRadiance += litCol * winLit * uNight * 1.4;
+totalEmissiveRadiance += winGlow;
 `;
 
 // ---------------------------------------------------------------------------
@@ -294,10 +578,12 @@ attribute vec4 iKinds;  // 16 block kinds, 4 bits each, packed 4 per channel
 varying vec3 vFabric;
 varying vec4 vKinds;
 varying vec2 vChunk;
+varying vec3 vWorldP;  // folded world position (for the wet-street mirror)
+varying vec3 vViewF;   // camera-to-ground ray in fabric space (for lamp reflections)
 ${FOLD_GLSL}
 
 void groundVertex(out vec3 P, out vec3 N) {
-  if (iChunk.w < 0.5) { P = vec3(0.0); N = vec3(0.0, 1.0, 0.0); vFabric = P; vKinds = vec4(0.0); vChunk = vec2(0.0); return; }
+  if (iChunk.w < 0.5) { P = vec3(0.0); N = vec3(0.0, 1.0, 0.0); vFabric = P; vKinds = vec4(0.0); vChunk = vec2(0.0); vWorldP = P; vViewF = N; return; }
   vec3 fab = vec3(iChunk.x + position.x, 0.0, iChunk.y + position.z);
   float sea = limboDecay(fab.xz, 1.0);
   fab.y += ripple(fab.xz) - sea * 0.6 + sin(fab.x * 0.05 + uTime * 0.8) * cos(fab.z * 0.04 + uTime * 0.6) * 0.5 * smoothstep(0.55, 0.9, sea);
@@ -306,7 +592,11 @@ void groundVertex(out vec3 P, out vec3 N) {
   vChunk = iChunk.xy;
   P = fab;
   N = vec3(0.0, 1.0, 0.0);
-  applyFolds(fab.xz, P, N);
+  vec3 ex = vec3(1.0, 0.0, 0.0);
+  vec3 ey = vec3(0.0, 1.0, 0.0);
+  applyFoldsFrame(fab.xz, P, N, ex, ey);
+  vWorldP = (modelMatrix * vec4(P, 1.0)).xyz;
+  vViewF = fabricViewRay(vWorldP, ex, ey);
 }
 `;
 
@@ -314,6 +604,11 @@ export const GROUND_FRAG_HEAD = /* glsl */ `
 varying vec3 vFabric;
 varying vec4 vKinds;
 varying vec2 vChunk;
+varying vec3 vWorldP;
+varying vec3 vViewF;
+uniform sampler2D tReflect;  // the city rendered from below the street (see src/fx/reflection.ts)
+uniform mat4 uReflMatrix;    // world position -> tReflect coordinates
+uniform float uReflOn;       // 0 when there is no mirror this frame
 uniform float uNight;
 uniform float uSnow;
 uniform float uWet;
@@ -342,6 +637,26 @@ float blockKind(vec2 f) {
   float packed = ch < 0.5 ? vKinds.x : ch < 1.5 ? vKinds.y : ch < 2.5 ? vKinds.z : vKinds.w;
   return mod(floor(packed / pow(16.0, slot)), 16.0);
 }
+// How wet this pixel is (0 dry, 1 soaked) and how much of it is standing water.
+float gWet = 0.0;
+float gPuddle = 0.0;
+vec2 gRipple = vec2(0.0);
+
+// Raindrops landing in standing water: expanding rings, returned as a slope.
+vec2 rainRipples(vec2 f) {
+  vec2 acc = vec2(0.0);
+  for (int k = 0; k < 2; k++) {
+    vec2 g = f * 1.7 + float(k) * vec2(0.37, 0.71);
+    vec2 cell = floor(g);
+    vec2 q = fract(g) - 0.5 - (vec2(hash12(cell + 1.3), hash12(cell + 7.1)) - 0.5) * 0.3;
+    float life = fract(uTime * 0.8 + hash12(cell + float(k) * 9.0));
+    float r = length(q);
+    float x = (r - life * 0.32) * 28.0;
+    acc += q / max(r, 1e-3) * sin(x) * exp(-x * x * 0.12) * (1.0 - life);
+  }
+  return acc;
+}
+
 float lampPool(float lateral, float along, float hw) {
   float la = floor((along - ${f(LAMP_OFFSET)}) / ${f(LAMP_SPACING)} + 0.5) * ${f(LAMP_SPACING)} + ${f(LAMP_OFFSET)};
   float da = along - la;
@@ -365,6 +680,10 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
   vec3 asphalt = vec3(0.15, 0.15, 0.16) * (0.85 + 0.3 * n);
   vec3 pavement = vec3(0.6, 0.58, 0.54) * (0.9 + 0.15 * n);
   vec3 col;
+  // paved surfaces hold a film of rain, grass soaks it up; puddles gather on roads and in the gutters
+  float paved = 1.0;
+  float pn = vnoise(f * 0.13 + 3.7) * 0.65 + vnoise(f * 0.41) * 0.35;
+  float pondWater = 0.0;
 
   if (walk.x + walk.y > 0.5) {
     if (road.x + road.y > 0.5) {
@@ -377,6 +696,8 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
       float zebraZ = road.y * step(hw.x, dl.x) * step(dl.x, hw.x + 3.5) * step(0.5, fract(f.y / 1.1));
       float paint = clamp(dashX + dashZ + zebraX + zebraZ, 0.0, 1.0);
       col = mix(col, vec3(0.85, 0.84, 0.78), paint * 0.85);
+      float gutter = max(road.x * step(hw.x - ${f(SIDEWALK)} - 0.8, dl.x), road.y * step(hw.y - ${f(SIDEWALK)} - 0.8, dl.y));
+      gPuddle = max(smoothstep(0.6, 0.66, pn), gutter * smoothstep(0.42, 0.5, pn));
     } else {
       vec2 slab = abs(fract(f / 1.5) - 0.5);
       float joint = step(0.46, max(slab.x, slab.y));
@@ -384,6 +705,7 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
       float curb = (step(dl.x, hw.x - ${f(SIDEWALK)} + 0.3) * walk.x + step(dl.y, hw.y - ${f(SIDEWALK)} + 0.3) * walk.y);
       col = mix(col, vec3(0.72, 0.7, 0.66), clamp(curb, 0.0, 1.0));
       rough = mix(0.8, 0.35, uWet);
+      gPuddle = smoothstep(0.66, 0.7, pn);
     }
   } else {
     float kind = blockKind(f);
@@ -397,8 +719,9 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
       float r = length(q);
       path = max(path, step(abs(r - 11.0), 2.0));
       col = mix(col, vec3(0.72, 0.66, 0.55), path);
-      if (r < 6.0) { col = vec3(0.12, 0.3, 0.38); rough = 0.08; }
-      else if (r < 7.0) col = vec3(0.7, 0.68, 0.62);
+      paved = path * 0.6;
+      if (r < 6.0) { col = vec3(0.12, 0.3, 0.38); rough = 0.08; pondWater = 1.0; }
+      else if (r < 7.0) { col = vec3(0.7, 0.68, 0.62); paved = 1.0; }
     } else if (kind < 2.5) {
       vec2 cell = floor(f / 3.0);
       col = mix(vec3(0.72, 0.69, 0.62), vec3(0.62, 0.6, 0.55), mod(cell.x + cell.y, 2.0));
@@ -407,6 +730,7 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
       vec2 g = abs(fract(f / 6.0) - 0.5);
       col = vec3(0.42, 0.43, 0.45) * (0.92 + 0.08 * step(0.47, max(g.x, g.y)));
       rough = mix(0.6, 0.2, uWet);
+      gPuddle = smoothstep(0.64, 0.7, pn);
     } else {
       col = pavement;
     }
@@ -416,13 +740,16 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
   float r0 = length(f);
   if (r0 < 46.0) {
     float ang = atan(f.y, f.x);
+    paved = 1.0;
+    gPuddle = 0.0;
     if (r0 < 14.0) col = vec3(0.7, 0.67, 0.6) * (0.92 + 0.08 * step(0.5, fract(ang * 12.0 / 6.2832)));
-    else if (r0 < 24.0) col = mix(vec3(0.26, 0.38, 0.17), vec3(0.34, 0.46, 0.2), n);
+    else if (r0 < 24.0) { col = mix(vec3(0.26, 0.38, 0.17), vec3(0.34, 0.46, 0.2), n); paved = 0.0; }
     else if (r0 < 25.0) col = vec3(0.75, 0.73, 0.68);
     else if (r0 < 40.0) {
       col = asphalt;
       rough = mix(0.85, 0.22, uWet);
       if (abs(r0 - 32.5) < 0.12 && fract(ang * 24.0 / 6.2832) > 0.5) col = vec3(0.85, 0.84, 0.78);
+      gPuddle = smoothstep(0.6, 0.66, pn);
     } else col = pavement * (0.94 + 0.06 * step(0.5, fract(ang * 16.0 / 6.2832)));
   }
 
@@ -433,7 +760,17 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
   // Snow and rain.
   float snowy = uSnow * (road.x + road.y > 0.5 ? 0.55 : 0.92);
   col = mix(col, vec3(0.9, 0.92, 0.96) * (0.95 + 0.05 * n), snowy);
-  col *= 1.0 - 0.35 * uWet;
+  col *= 1.0 - 0.35 * uWet * paved;
+  // wet paving scatters less light back: the lamp pools turn into reflections
+  glow *= 1.0 - 0.45 * uWet * paved;
+  gWet = uWet * max(paved, 0.15);
+  gPuddle = max(gPuddle * paved, pondWater) * uWet;
+  // standing water is darker and a near-perfect mirror
+  col *= 1.0 - 0.45 * gPuddle;
+  rough = mix(rough, 0.03, gPuddle);
+  // rings from the rain, faded out before they shimmer into noise
+  float rippleFade = 1.0 - smoothstep(0.12, 0.4, fwidth(f.x) * 1.7);
+  if (gPuddle > 0.01 && rippleFade > 0.0) gRipple = rainRipples(f) * rippleFade;
 
   // Limbo: the edges of the dream dissolve into a grey sea.
   if (uLimbo > 0.0) {
@@ -444,8 +781,56 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
     col = mix(col, water, sea);
     col = mix(col, vec3(0.9, 0.92, 0.94), foam * 0.6);
     rough = mix(rough, 0.12, sea);
+    // Limbo's sea mirrors whatever is left of the city
+    gWet = max(gWet, sea * 0.8);
+    gPuddle = max(gPuddle, sea * 0.6);
   }
   return col;
+}
+
+// Wet asphalt smears a light into a long streak pointing at the viewer.
+float lampStreak(vec2 d, vec2 dir, float t) {
+  float along = dot(d, dir);
+  float across = dot(d, vec2(-dir.y, dir.x));
+  float wa = 0.1 + 0.01 * t;
+  float wl = 1.0 + 0.4 * t;
+  return exp(-across * across / (wa * wa) - along * along / (wl * wl)) / (1.0 + 0.03 * t);
+}
+
+// The street lamps reflected in the wet street, traced analytically in fabric
+// space: follow the reflected view ray up to lantern height and measure how
+// close it passes to the nearest lamp on either kind of street. Used when the
+// mirror is off (low quality, or high above the city).
+vec3 lampReflections(vec2 f, vec3 vd) {
+  if (vd.y > -1e-3) return vec3(0.0);
+  vec3 r = normalize(vec3(vd.x, -vd.y, vd.z));
+  float t = 4.95 / max(r.y, 0.02);
+  vec2 q = f + r.xz * t;
+  vec2 dir = normalize(r.xz + vec2(1e-5));
+  // streaks are longer than the gap between lamps, so take both neighbours on both kerbs
+  float lx = floor(q.x / ${f(BLOCK)} + 0.5) * ${f(BLOCK)};
+  float lz = floor(q.y / ${f(BLOCK)} + 0.5) * ${f(BLOCK)};
+  float hx = halfWidth(lx / ${f(BLOCK)}) - 1.0;
+  float hz = halfWidth(lz / ${f(BLOCK)}) - 1.0;
+  vec2 k = floor((q - ${f(LAMP_OFFSET)}) / ${f(LAMP_SPACING)}) * ${f(LAMP_SPACING)} + ${f(LAMP_OFFSET)};
+  float acc = 0.0;
+  for (int i = 0; i < 2; i++) {
+    float side = i == 0 ? -1.0 : 1.0;
+    for (int j = 0; j < 2; j++) {
+      float dk = float(j) * ${f(LAMP_SPACING)};
+      acc += lampStreak(q - vec2(lx + side * hx, k.y + dk), dir, t);
+      acc += lampStreak(q - vec2(k.x + dk, lz + side * hz), dir, t);
+    }
+  }
+  return vec3(1.0, 0.76, 0.48) * acc;
+}
+
+// Samples the mirror, blurred by mip level and smeared vertically into streaks.
+vec3 mirrorTaps(vec2 uv, float lod, float streak) {
+  vec3 c = textureLod(tReflect, uv, lod).rgb * 0.36;
+  c += (textureLod(tReflect, uv + vec2(0.0, streak), lod).rgb + textureLod(tReflect, uv - vec2(0.0, streak), lod).rgb) * 0.2;
+  c += (textureLod(tReflect, uv + vec2(0.0, streak * 2.4), lod).rgb + textureLod(tReflect, uv - vec2(0.0, streak * 2.4), lod).rgb) * 0.12;
+  return c;
 }
 
 vec3 creaseGlow(vec2 f) {
@@ -494,6 +879,31 @@ export const GROUND_FRAG_ROUGH = /* glsl */ `
 #include <roughnessmap_fragment>
 roughnessFactor = groundRough;
 `;
+// Runs after lighting: on wet, flat street the plain sky reflection gives way to
+// the mirrored city (or, without a mirror, to the reflected street lamps).
+export const GROUND_FRAG_WET = /* glsl */ `
+#include <aomap_fragment>
+if (gl_FrontFacing && gWet > 0.001) {
+  float wetNV = saturate(dot(geometryNormal, geometryViewDir));
+  // a generous Fresnel: a rain-soaked street reads as a mirror long before physics says it should
+  float wetF = 0.04 + 0.96 * pow(1.0 - wetNV, 3.0);
+  float soak = gWet * mix(0.7, 1.0, gPuddle / max(uWet, 0.3));
+  vec3 wn = inverseTransformDirection(geometryNormal, viewMatrix);
+  float level = smoothstep(0.985, 0.998, wn.y) * (1.0 - smoothstep(0.25, 0.7, abs(vWorldP.y)));
+  float mirrorOn = uReflOn * level;
+  if (mirrorOn > 0.001) {
+    vec4 rc = uReflMatrix * vec4(vWorldP, 1.0);
+    float still = clamp(gPuddle / max(uWet, 0.3), 0.0, 1.0);
+    vec2 uv = rc.xy / rc.w + gRipple * 0.012 * still;
+    vec3 mirror = mirrorTaps(uv, mix(1.8, 0.2, still), mix(0.016, 0.0015, still));
+    reflectedLight.indirectSpecular = mix(reflectedLight.indirectSpecular, mirror * wetF, mirrorOn * soak);
+  }
+  if (mirrorOn < 0.999) {
+    reflectedLight.indirectSpecular += lampReflections(vFabric.xz, vViewF) * (0.1 + 1.6 * uNight) * wetF * soak * (1.0 - mirrorOn);
+  }
+}
+`;
+
 export const GROUND_FRAG_EMISSIVE = /* glsl */ `
 #include <emissivemap_fragment>
 totalEmissiveRadiance += groundGlow;

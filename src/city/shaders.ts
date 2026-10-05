@@ -829,11 +829,11 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
   // Limbo: the edges of the dream dissolve into a grey sea.
   if (uLimbo > 0.0) {
     float r = length(f) + (vnoise(f * 0.004) - 0.5) * 360.0;
+    // No surf line: the streets fade into the sea over 140 m with the city still standing in it,
+    // so any line drawn at a fixed radius lands on dry streets and plazas.
     float sea = uLimbo * smoothstep(560.0, 700.0, r);
-    float foam = uLimbo * (1.0 - smoothstep(0.0, 14.0, abs(r - 560.0))) * (0.6 + 0.4 * sin(uTime * 1.5 + f.x * 0.2));
     vec3 water = uSeaColor * (0.85 + 0.25 * vnoise(f * 0.05 + uTime * 0.05));
     col = mix(col, water, sea);
-    col = mix(col, vec3(0.9, 0.92, 0.94), foam * 0.6);
     rough = mix(rough, 0.12, sea);
     // Limbo's sea mirrors whatever is left of the city
     gWet = max(gWet, sea * 0.8);

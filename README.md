@@ -19,6 +19,8 @@ It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is
 | ![A hotel corridor hanging tilted over the boulevard, turning like a barrel](docs/images/hallway-street.jpg) | ![Inside the corridor, turned on its side: the carpet is a wall and the doors are underfoot](docs/images/hallway-inside.jpg) |
 | **Riding the fold** | **At the top** |
 | ![Mid-ride: the street behind curls up and over, a park hanging overhead](docs/images/ride-curl.jpg) | ![Upside down 96 m up, looking up at the city below](docs/images/ride-top.jpg) |
+| **Rooms behind the windows** | **Wet streets in the Rain** |
+| ![A Paris facade at night: lit windows open onto rooms with curtains, lamps, pictures and sofas](docs/images/windows.jpg) | ![A boulevard at dusk in the rain, its puddles mirroring the brick terraces, the lamps and the shops](docs/images/rain.jpg) |
 
 ![The Paris Fold at night, thousands of lit windows overhead](docs/images/night.jpg)
 
@@ -45,7 +47,7 @@ It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is
 | Level | | Time |
 | --- | --- | --- |
 | 1 · The City | Clear Paris morning | ×20 |
-| 2 · Rain | Dusk, wet streets, restless projections | ×400 |
+| 2 · Rain | Dusk, wet streets that mirror the city, restless projections | ×400 |
 | 3 · Snow | White silence | ×8,000 |
 | Limbo | Ash, a grey sea, the city sinking into it | ∞ |
 
@@ -72,10 +74,12 @@ The short version: **everything is simulated on the flat sheet, and folding happ
 - **Fabric space and world space.** Generation, collision, the crowd, the dreamer's footsteps and streaming all live on the unfolded sheet. A fold is a rigid transform that depends only on how far a point lies past the hinge, so it is continuous, it preserves distances along the street (which is why you can walk up a curl with no special code), and nested folds compose like paper. Crossing folds cut the sheet like the corners of a paper box. The maths is in [`src/core/fold.ts`](src/core/fold.ts), mirrored in GLSL in [`src/city/shaders.ts`](src/city/shaders.ts), and pinned by [`tests/fold.test.ts`](tests/fold.test.ts).
 - **About eleven draw calls for the whole city.** Each kind of object is one instanced mesh, and each streamed 256 m chunk owns a fixed slab of instances, so loading a chunk is one partial buffer upload and the draw-call count never grows.
 - **Streaming after folding.** Chunks are chosen by their distance *after* folding, so the districts hanging overhead are loaded even though they are far away on the sheet.
-- **No textures.** Facades, roofs, streets, parks, snow, wet sheen, crease lines and the glowing underside of a fold are all painted procedurally in shaders.
+- **No textures.** Facades, roofs, streets, parks, snow, puddles, crease lines and the glowing underside of a fold are all painted procedurally in shaders.
+- **Rooms behind the windows.** Each window is a hole into a room traced in the facade shader (interior mapping): walls, floor, a ceiling lamp, curtains and furniture shift with parallax as you walk past, with no extra geometry. Far away a window fades back to a flat pane.
+- **Wet streets.** In the Rain the street is a mirror. The city is drawn a second time from below the street at reduced resolution, and the ground looks it up: sharp in puddles that ripple with raindrops, smeared into long streaks on wet asphalt. On Low quality the street lamps' reflections are traced analytically instead. See [`src/fx/reflection.ts`](src/fx/reflection.ts).
 - **GPU picking.** Clicking on a folded city renders a single pixel of fabric coordinates under the cursor, so a fold can start on a wall or a ceiling.
 - **One exception to the rule.** Inside the rotating hallway, gravity points at the real ground. The dreamer is simulated in the corridor's own spinning frame, with friction that holds until the floor tilts past about 31°, and the camera's up eases toward whichever wall is underfoot. See [`src/world/hallway.ts`](src/world/hallway.ts).
-- **Adaptive quality.** Four tiers trade resolution, shadows, bloom, view distance and crowd size, chosen from the device and adjusted to hold the frame rate.
+- **Adaptive quality.** Four tiers trade resolution, shadows, bloom, the wet-street mirror, view distance and crowd size, chosen from the device and adjusted to hold the frame rate.
 
 The [city plan](docs/CITY_PLAN.md) covers the districts, the rules of the dream, the full fold algebra, the scaling strategy and the roadmap (multiplayer through a shared fold log, WebGPU and WebXR).
 
@@ -84,7 +88,7 @@ The [city plan](docs/CITY_PLAN.md) covers the districts, the rules of the dream,
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm test             # fold algebra, generator and hallway tests
+npm test             # fold algebra, generator, hallway and mirror tests
 npm run build        # static site in dist/
 npm run build:single # one self-contained HTML file in dist-single/
 ```
@@ -99,9 +103,9 @@ src/
   city/    chunk generator, shaders, materials, slab allocator, streamer
   world/   sky and weather, dream levels, the projections crowd, the rotating hallway
   modes/   architect, dream walk, riding the fold, dreamscape presets
-  fx/      GPU picking, procedural audio, post-processing
+  fx/      GPU picking, procedural audio, post-processing, the wet-street mirror
   ui/      styles and the HUD totem
-tests/     fold, generator, hallway and ride tests
+tests/     fold, generator, hallway, ride and mirror tests
 docs/      the city plan and screenshots
 ```
 

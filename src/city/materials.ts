@@ -11,6 +11,7 @@ import {
   GROUND_FRAG_EMISSIVE,
   GROUND_FRAG_HEAD,
   GROUND_FRAG_ROUGH,
+  GROUND_FRAG_WET,
   GROUND_VERT_HEAD,
   PICK_FRAG,
   PROP_FRAG_COLOR,
@@ -43,6 +44,10 @@ export const U = {
   uSeaColor: { value: new THREE.Color(0.32, 0.38, 0.42) },
   uFoliageA: { value: new THREE.Color(0.22, 0.36, 0.14) },
   uFoliageB: { value: new THREE.Color(0.38, 0.5, 0.2) },
+  // The wet-street mirror (src/fx/reflection.ts).
+  tReflect: { value: null as THREE.Texture | null },
+  uReflMatrix: { value: new THREE.Matrix4() },
+  uReflOn: { value: 0 },
 };
 
 type Kind = 'building' | 'ground' | 'prop';
@@ -67,6 +72,7 @@ const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [s
       ['#include <color_fragment>', GROUND_FRAG_COLOR],
       ['#include <roughnessmap_fragment>', GROUND_FRAG_ROUGH],
       ['#include <emissivemap_fragment>', GROUND_FRAG_EMISSIVE],
+      ['#include <aomap_fragment>', GROUND_FRAG_WET],
     ],
   },
   prop: {

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { U } from '../city/materials';
+import { WetReflection } from '../fx/reflection';
 import { DreamLevel, LEVELS, Palette, Weather } from './themes';
 
 const SKY_VERT = /* glsl */ `
@@ -109,6 +110,9 @@ export class Environment {
   level: DreamLevel = LEVELS[0];
   time = LEVELS[0].time;
   night = 0;
+  /** Resolution of the wet-street mirror as a fraction of the screen's (0 = off, set by the quality tier). */
+  mirrorScale = 0.5;
+  private mirror = new WetReflection();
   private weatherRain: THREE.LineSegments;
   private weatherFlakes: THREE.Points;
   private weatherUniforms;
@@ -131,7 +135,7 @@ export class Environment {
 
   constructor(
     private scene: THREE.Scene,
-    renderer: THREE.WebGLRenderer,
+    private renderer: THREE.WebGLRenderer,
   ) {
     this.skyU = {
       uTop: { value: this.colors.top },
@@ -279,7 +283,7 @@ export class Environment {
     s.limbo += (this.level.limbo - s.limbo) * k;
   }
 
-  update(dt: number, camera: THREE.Camera, focus: THREE.Vector3, shadowExtent: number): void {
+  update(dt: number, camera: THREE.PerspectiveCamera, focus: THREE.Vector3, shadowExtent: number): void {
     const k = 1 - Math.exp(-dt * 2.2);
     this.blend(k);
     const c = this.colors;
@@ -322,6 +326,11 @@ export class Environment {
     U.uFoliageB.value.lerp(tmp.setHex(this.level.foliageB), k);
 
     this.updateWeather(this.level.weather, camera);
+
+    // Wet streets mirror the city. From high above the street fills little of
+    // the view at a steep angle, where water hardly reflects, so the mirror fades out.
+    const mirror = this.scalars.wet * (1 - THREE.MathUtils.smoothstep(camera.position.y, 160, 260));
+    this.mirror.update(this.renderer, this.scene, camera, this.mirrorScale, mirror, [this.weatherRain, this.weatherFlakes]);
 
     // Re-render the reflection environment while the look is changing.
     this.envClock += dt;

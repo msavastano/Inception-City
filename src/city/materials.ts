@@ -20,6 +20,11 @@ import {
   PROP_FRAG_METAL,
   PROP_FRAG_ROUGH,
   PROP_VERT_HEAD,
+  SHARD_FRAG_COLOR,
+  SHARD_FRAG_HEAD,
+  SHARD_FRAG_METAL,
+  SHARD_FRAG_ROUGH,
+  SHARD_VERT_HEAD,
 } from './shaders';
 
 /**
@@ -48,9 +53,12 @@ export const U = {
   tReflect: { value: null as THREE.Texture | null },
   uReflMatrix: { value: new THREE.Matrix4() },
   uReflOn: { value: 0 },
+  // The café explosion (src/world/collapse.ts).
+  uBlast: { value: new THREE.Vector4(0, 0, 0, 0) },
+  uShatter: { value: new THREE.Vector4(0, 0, 9.8, 0) },
 };
 
-type Kind = 'building' | 'ground' | 'prop';
+type Kind = 'building' | 'ground' | 'prop' | 'shard';
 
 const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [string, string][] }> = {
   building: {
@@ -84,6 +92,16 @@ const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [s
       ['#include <roughnessmap_fragment>', PROP_FRAG_ROUGH],
       ['#include <metalnessmap_fragment>', PROP_FRAG_METAL],
       ['#include <emissivemap_fragment>', PROP_FRAG_EMISSIVE],
+    ],
+  },
+  shard: {
+    vert: SHARD_VERT_HEAD,
+    frag: SHARD_FRAG_HEAD,
+    call: 'shardVertex',
+    replace: [
+      ['#include <color_fragment>', SHARD_FRAG_COLOR],
+      ['#include <roughnessmap_fragment>', SHARD_FRAG_ROUGH],
+      ['#include <metalnessmap_fragment>', SHARD_FRAG_METAL],
     ],
   },
 };
@@ -135,7 +153,7 @@ export function foldedDepthMaterial(kind: Kind): THREE.MeshDepthMaterial {
 }
 
 /** Renders fabric coordinates (x, height, z, kind) for GPU picking on folded geometry. */
-export function pickMaterial(kind: Exclude<Kind, 'prop'>, kindId: number): THREE.ShaderMaterial {
+export function pickMaterial(kind: Exclude<Kind, 'prop' | 'shard'>, kindId: number): THREE.ShaderMaterial {
   const spec = SPEC[kind];
   return new THREE.ShaderMaterial({
     uniforms: { ...U, uKind: { value: kindId } },

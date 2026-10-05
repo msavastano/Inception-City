@@ -2,10 +2,28 @@ import * as THREE from 'three';
 import { CHUNK, GROUND_COARSE_SEGMENTS, GROUND_FINE_SEGMENTS, SLAB } from '../core/config';
 import { Fold, FoldShape, foldPoint } from '../core/fold';
 import { hash3 } from '../core/rng';
-import { ChunkData, generateChunk } from './generator';
+import { BuildingRec, ChunkData, generateChunk } from './generator';
 import { buildingGeometry, groundGeometry, lampGeometry, treeGeometry } from './geometry';
 import { foldedDepthMaterial, foldedMaterial, pickMaterial } from './materials';
 import { SlabPool } from './pool';
+
+/** A building's box as it is drawn (brush edits applied), for effects that need its walls. */
+export interface BuildingBox {
+  /** Footprint centre and size, fabric metres. */
+  x: number;
+  z: number;
+  w: number;
+  d: number;
+  /** Bottom and top of the walls. */
+  y0: number;
+  y1: number;
+  style: BuildingRec['style'];
+  color: [number, number, number];
+  /** The seed its shader uses (a crown shares its tower's). */
+  seed: number;
+  /** The height its shader sinks it by in Limbo. */
+  sink: number;
+}
 
 interface LoadedChunk {
   key: string;
@@ -339,6 +357,37 @@ export class CityStreamer {
       if (!moved) break;
     }
     return { x, z };
+  }
+
+  /** The loaded buildings (not roofs or chimneys) whose footprint comes within r of a fabric point. */
+  buildingsNear(x: number, z: number, r: number): BuildingBox[] {
+    const out: BuildingBox[] = [];
+    for (const c of this.loaded.values()) {
+      const x0 = c.cx * CHUNK;
+      const z0 = c.cz * CHUNK;
+      if (x + r < x0 || x - r > x0 + CHUNK || z + r < z0 || z - r > z0 + CHUNK) continue;
+      const list = c.data.buildings;
+      list.forEach((b, i) => {
+        const dx = Math.max(Math.abs(b.x - x) - b.w / 2, 0);
+        const dz = Math.max(Math.abs(b.z - z) - b.d / 2, 0);
+        if (dx * dx + dz * dz > r * r) return;
+        // the same height multiplier and Limbo parameters the building shader is given (see load())
+        const g = this.edits.get(`${c.cx},${c.cz},${b.parent >= 0 ? b.parent : i}`) ?? 1;
+        out.push({
+          x: b.x,
+          z: b.z,
+          w: b.w,
+          d: b.d,
+          y0: b.y * g,
+          y1: (b.y + b.h) * g,
+          style: b.style,
+          color: b.color,
+          seed: b.parent >= 0 ? list[b.parent].seed : b.seed,
+          sink: b.y > 0.5 ? b.y : b.h,
+        });
+      });
+    }
+    return out;
   }
 
   /** Architect brush: raise (amount > 0) or sink buildings around a fabric point. */

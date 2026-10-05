@@ -21,6 +21,8 @@ It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is
 | ![Mid-ride: the street behind curls up and over, a park hanging overhead](docs/images/ride-curl.jpg) | ![Upside down 96 m up, looking up at the city below](docs/images/ride-top.jpg) |
 | **Rooms behind the windows** | **Wet streets in the Rain** |
 | ![A Paris facade at night: lit windows open onto rooms with curtains, lamps, pictures and sofas](docs/images/windows.jpg) | ![A boulevard at dusk in the rain, its puddles mirroring the brick terraces, the lamps and the shops](docs/images/rain.jpg) |
+| **The café explosion** | **Hanging in slow motion** |
+| ![Stability at zero: the facades along a Paris street crack open and blow out, stone and awnings flying into the street](docs/images/collapse-street.jpg) | ![From the sidewalk, looking up: blown-out walls and a cloud of debris hanging in the air above the street](docs/images/collapse-sidewalk.jpg) |
 
 ![The Paris Fold at night, thousands of lit windows overhead](docs/images/night.jpg)
 
@@ -41,6 +43,7 @@ It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is
 - **The rotating hallway (H):** a hotel corridor rises around you and turns like a barrel. Its walls carry you up until you slide onto the next one, so you end up running along the walls and the ceiling. Walk out of either end to get back to the street.
 - Trees, lamps, buildings and the monument are solid. The projections walk the sidewalks with you.
 - Press K for the kick: every fold collapses at once with a ripple and a BRAAAM, and you wake up a level.
+- **The café explosion:** fold too hard and stability hits zero. The facades around you crack and blow out into the street, then the dream slows almost to a stop and the stone, glass and shop awnings hang in the air while you walk among them, until the kick arrives on its own. It happens in architect mode too, around the spot you are looking at.
 
 **Dream levels** change everything at once: palette, weather, colour grade, ambient drone and time dilation.
 
@@ -78,6 +81,7 @@ The short version: **everything is simulated on the flat sheet, and folding happ
 - **Rooms behind the windows.** Each window is a hole into a room traced in the facade shader (interior mapping): walls, floor, a ceiling lamp, curtains and furniture shift with parallax as you walk past, with no extra geometry. Far away a window fades back to a flat pane.
 - **Wet streets.** In the Rain the street is a mirror. The city is drawn a second time from below the street at reduced resolution, and the ground looks it up: sharp in puddles that ripple with raindrops, smeared into long streaks on wet asphalt. On Low quality the street lamps' reflections are traced analytically instead. See [`src/fx/reflection.ts`](src/fx/reflection.ts).
 - **GPU picking.** Clicking on a folded city renders a single pixel of fabric coordinates under the cursor, so a fold can start on a wall or a ceiling.
+- **The café explosion.** At zero stability a blast wave runs through the building shader, cracking each wall into cells and opening some of them onto the rooms behind, while a few thousand instanced shards leave the same walls at the same moments. The dream's clock then runs at about a sixth of real time, but the dreamer keeps real time. See [`src/world/collapse.ts`](src/world/collapse.ts).
 - **One exception to the rule.** Inside the rotating hallway, gravity points at the real ground. The dreamer is simulated in the corridor's own spinning frame, with friction that holds until the floor tilts past about 31°, and the camera's up eases toward whichever wall is underfoot. See [`src/world/hallway.ts`](src/world/hallway.ts).
 - **Adaptive quality.** Four tiers trade resolution, shadows, bloom, the wet-street mirror, view distance and crowd size, chosen from the device and adjusted to hold the frame rate.
 
@@ -88,7 +92,7 @@ The [city plan](docs/CITY_PLAN.md) covers the districts, the rules of the dream,
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm test             # fold algebra, generator, hallway and mirror tests
+npm test             # fold algebra, generator, hallway, mirror and café explosion tests
 npm run build        # static site in dist/
 npm run build:single # one self-contained HTML file in dist-single/
 ```
@@ -101,11 +105,11 @@ Built with TypeScript, [Three.js](https://threejs.org) and [Vite](https://vite.d
 src/
   core/    fold algebra, grid constants, seeded noise
   city/    chunk generator, shaders, materials, slab allocator, streamer
-  world/   sky and weather, dream levels, the projections crowd, the rotating hallway
+  world/   sky and weather, dream levels, the projections crowd, the rotating hallway, the café explosion
   modes/   architect, dream walk, riding the fold, dreamscape presets
   fx/      GPU picking, procedural audio, post-processing, the wet-street mirror
   ui/      styles and the HUD totem
-tests/     fold, generator, hallway, ride and mirror tests
+tests/     fold, generator, hallway, ride, mirror and café explosion tests
 docs/      the city plan and screenshots
 ```
 

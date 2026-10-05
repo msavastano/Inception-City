@@ -52,7 +52,8 @@ Boulevards carry plane trees. Every street has lamps on both sides at a fixed rh
 4. **The dream pushes back.** Every fold costs stability. Fast, violent folding costs more. The totem wobbles, the picture shakes and splits into colour fringes, and the projections start to stare.
 5. **Projections defend the dreamer's mind.** Calm projections walk the sidewalks. As stability falls they stop and turn to look at you. When it collapses they hunt. If they reach you, you are kicked out.
 6. **The kick.** A kick (the K key, or being caught) collapses every fold at once with a ripple through the ground and a BRAAAM. In first person, a kick also wakes you up one level. Afterwards the dream is calm: stability is back to full while the city unwinds, and the projections forget you.
-7. **Time dilates with depth.** Each level runs faster than the one above. The HUD shows real time next to dream time.
+7. **The café explosion.** If stability reaches zero, the dream comes apart around the dreamer. A blast runs out through the walls, cracking them and blowing pieces of stone, glass and shop awning out into the street, and then the dream slows almost to a stop: the debris hangs in the air while the dreamer can still walk among it. About four seconds later the kick arrives on its own (5.7).
+8. **Time dilates with depth.** Each level runs faster than the one above. The HUD shows real time next to dream time.
 
 ### 3.1 Dream levels
 
@@ -201,6 +202,16 @@ In the Rain the street is a mirror. Each frame the scene is rendered a second ti
 
 The mirror costs a second pass over the city's geometry, so it scales with the quality tier (6.7) and fades out above about 160 m, where the street is seen too steeply to reflect much. Without it (on Low, or from high above), the street lamps' reflections are traced analytically instead: the reflected view ray is followed up to lantern height in fabric space, and its distance from the nearest lamps on both kerbs becomes a streak, long towards the viewer and narrow across.
 
+### 5.7 The café explosion
+
+When stability reaches zero the city comes apart around the dreamer (or around the architect's focus), as the café street does in the film. Two halves tell the same story with the same numbers:
+
+- **The walls.** The building shader has a blast uniform: a centre, the radius the wave front has reached, and a strength. Inside the radius each facade is cut into cells about 2.2 m wide (a Voronoi pattern on the wall's own coordinates). Once the wave passes a cell, its glass loses its sheen, cracks open along the cell borders, and a share of the cells (about 45% near the blast, none at 140 m) are blown out. A blown-out cell opens onto the room behind it, traced exactly as a window is (5.5), with a rim of broken masonry. A cell's hash decides both whether it breaks and how late the wave reaches it, so the wall breaks up raggedly rather than in a clean ring.
+- **The shards.** At the moment of the blast the CPU picks up to a few thousand pieces of wall from the loaded buildings within 140 m, with the same density as the holes, mostly on the walls that face the blast and never from a wall pressed against its neighbour. Each piece gets the moment the wave reaches it, a velocity out of its wall, a tumble and a colour: the stone of its facade, dark window glass, or the red, green and blue cloth of a shopfront awning. One instanced mesh draws them all, and its vertex shader flies each one on a parabola until it lands on the street, then folds it like everything else.
+- **Slow motion.** The dream's clock (everything driven by shader time, the crowd, the folds and the weather) runs at full speed for a moment and then at about a sixth of real time, while the dreamer and the cameras keep real time. The drone sinks with it and the colour drains a little. After 4.2 s the kick fires on its own; the shards shrink away and the walls heal under its flash while time comes back up to speed.
+
+`src/world/collapse.ts` holds the timeline and the shard planner; `tests/collapse.test.ts` pins the slow motion, the automatic kick and the healing, and where the shards may come from.
+
 ## 6. Scaling
 
 The goal is a city that is effectively infinite, foldable in real time, and still smooth on a phone. Each of the decisions below exists to keep one cost constant as the city grows.
@@ -225,6 +236,7 @@ The result is about eleven draw calls for the whole city, whether it has two tho
 - **Props** (trees and lamps) are only written for chunks inside a smaller ring around the viewer, with their own budget per frame.
 - **Facades** fade their window pattern to its average colour once a window is only a few pixels wide, which removes moiré without textures or mipmaps. The rooms behind the windows are only traced while a window is big enough on screen to show one.
 - **The crowd** is a single instanced mesh. Its size follows the quality tier, from 180 to 900 people.
+- **The café explosion** throws between 1,600 (Low) and 7,000 (Ultra) shards, all in one instanced mesh that is hidden the rest of the time. The building shader's blast branch costs one uniform test per pixel while the dream holds.
 
 ### 6.5 No textures
 
@@ -266,9 +278,12 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 - Riding the fold: the street you stand on carries you over the city
 - Solid plates behind all HUD text so it reads over any sky or street
 
-### Milestone 1.2: close-up realism (this release)
+### Milestone 1.2: close-up realism (done)
 - Rooms behind the windows, traced in the facade shader, with lamps, curtains and furniture
 - Wet streets in the Rain: the city mirrored in puddles and smeared across wet asphalt, rippled by raindrops
+
+### Milestone 1.3: the café explosion (this release)
+- When stability hits zero the facades crack and blow out in slow motion, then the kick arrives on its own
 
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
@@ -300,7 +315,8 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/city/streamer.ts` | World-space streaming, LOD, collision and raise-brush edits |
 | `src/world/` | Sky, sun and weather, dream levels, the projections crowd |
 | `src/world/hallway.ts` | The rotating hallway: geometry, shader painter and the rider's physics |
+| `src/world/collapse.ts` | The café explosion: the shard planner, the slow-motion timeline and the automatic kick |
 | `src/modes/` | Architect controls, Dream Walk controls, presets, the ride fold (`ride.ts`) |
 | `src/fx/` | GPU picking, procedural audio, post-processing, the wet-street mirror (`reflection.ts`) |
 | `src/ui/` | Styles and the HUD totem |
-| `tests/` | Fold algebra, generator, hallway, ride and wet-street mirror tests |
+| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror and café explosion tests |

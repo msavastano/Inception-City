@@ -630,8 +630,9 @@ export const GROUND_VERT_HEAD = /* glsl */ `
 attribute vec4 iChunk;  // origin x, origin z, birth time, unused
 attribute vec4 iKinds;  // 16 block kinds, 4 bits each, packed 4 per channel
 varying vec3 vFabric;
-varying vec4 vKinds;
-varying vec2 vChunk;
+// flat: one value per tile, passed through untouched rather than interpolated
+flat varying vec4 vKinds;
+flat varying vec2 vChunk;
 varying vec3 vWorldP;  // folded world position (for the wet-street mirror)
 varying vec3 vViewF;   // camera-to-ground ray in fabric space (for lamp reflections)
 ${FOLD_GLSL}
@@ -656,8 +657,8 @@ void groundVertex(out vec3 P, out vec3 N) {
 
 export const GROUND_FRAG_HEAD = /* glsl */ `
 varying vec3 vFabric;
-varying vec4 vKinds;
-varying vec2 vChunk;
+flat varying vec4 vKinds;
+flat varying vec2 vChunk;
 varying vec3 vWorldP;
 varying vec3 vViewF;
 uniform sampler2D tReflect;  // the city rendered from below the street (see src/fx/reflection.ts)
@@ -685,11 +686,32 @@ float vnoise(vec2 p) {
 float halfWidth(float line) { return mod(line, ${f(CHUNK_BLOCKS)}) < 0.5 ? ${f(BOULEVARD_HALF)} : ${f(STREET_HALF)}; }
 float blockKind(vec2 f) {
   vec2 b = clamp(floor((f - vChunk) / ${f(BLOCK)}), 0.0, ${f(CHUNK_BLOCKS - 1)});
-  float idx = b.x + b.y * ${f(CHUNK_BLOCKS)};
-  float ch = floor(idx / 4.0);
-  float slot = idx - ch * 4.0;
-  float packed = ch < 0.5 ? vKinds.x : ch < 1.5 ? vKinds.y : ch < 2.5 ? vKinds.z : vKinds.w;
-  return mod(floor(packed / pow(16.0, slot)), 16.0);
+  int idx = int(b.x + b.y * ${f(CHUNK_BLOCKS)});
+  int ch = idx >> 2;
+  float packed = ch == 0 ? vKinds.x : ch == 1 ? vKinds.y : ch == 2 ? vKinds.z : vKinds.w;
+  // Integer unpacking: float division by pow(16, slot) can land a hair under a whole number on
+  // some GPUs, which flips a block's kind in scattered rows of pixels.
+  return float((int(packed + 0.5) >> (4 * (idx & 3))) & 15);
+}
+// Painted lines have no mipmaps: each one is box-filtered over the pixel's footprint w (from fwidth),
+// or distant stripes and checkers alias into moire that crawls as the camera moves.
+// Coverage of bands d wide centred on every whole number t.
+float bandsInt(float t, float d) { t += 0.5 * d; return floor(t) * d + min(fract(t), d); }
+float bands(float t, float d, float w) {
+  w = max(w, 1e-4);
+  t = fract(t);
+  return (bandsInt(t + 0.5 * w, d) - bandsInt(t - 0.5 * w, d)) / w;
+}
+// Coverage of the single band |x| < h.
+float band(float x, float h, float w) {
+  w = max(w, 1e-4);
+  return (clamp(x + 0.5 * w, -h, h) - clamp(x - 0.5 * w, -h, h)) / w;
+}
+// mod(floor(p.x) + floor(p.y), 2.0), filtered.
+float checker(vec2 p, vec2 w) {
+  w = max(w, 1e-4);
+  vec2 i = 2.0 * (abs(fract((p - 0.5 * w) * 0.5) - 0.5) - abs(fract((p + 0.5 * w) * 0.5) - 0.5)) / w;
+  return 0.5 - 0.5 * i.x * i.y;
 }
 // How wet this pixel is (0 dry, 1 soaked) and how much of it is standing water.
 float gWet = 0.0;
@@ -723,13 +745,16 @@ float lampPool(float lateral, float along, float hw) {
 vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
   rough = 0.9;
   glow = vec3(0.0);
+  // the pixel's footprint in metres, taken before any per-pixel branch
+  vec2 fw = fwidth(f);
   vec2 line = floor(f / ${f(BLOCK)} + 0.5);
   vec2 off = f - line * ${f(BLOCK)};
   vec2 dl = abs(off);
   vec2 hw = vec2(halfWidth(line.x), halfWidth(line.y));
   vec2 road = step(dl, hw - ${f(SIDEWALK)});
   vec2 walk = step(dl, hw);
-  float n = vnoise(f * 0.7) * 0.5 + vnoise(f * 0.11) * 0.5;
+  // fine grit fades to its average once it is smaller than a pixel, or it sparkles
+  float n = mix(vnoise(f * 0.7), 0.5, smoothstep(0.4, 1.2, max(fw.x, fw.y) * 0.7)) * 0.5 + vnoise(f * 0.11) * 0.5;
 
   vec3 asphalt = vec3(0.15, 0.15, 0.16) * (0.85 + 0.3 * n);
   vec3 pavement = vec3(0.6, 0.58, 0.54) * (0.9 + 0.15 * n);
@@ -737,6 +762,8 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
   // paved surfaces hold a film of rain, grass soaks it up; puddles gather on roads and in the gutters
   float paved = 1.0;
   float pn = vnoise(f * 0.13 + 3.7) * 0.65 + vnoise(f * 0.41) * 0.35;
+  // puddle edges soften to at least a pixel wide
+  float pw = fwidth(pn);
   float pondWater = 0.0;
 
   if (walk.x + walk.y > 0.5) {
@@ -744,22 +771,21 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
       col = asphalt;
       rough = mix(0.85, 0.22, uWet);
       // dashed centre lines and zebra crossings
-      float dashX = road.x * (1.0 - walk.y) * step(abs(off.x), 0.12) * step(0.5, fract(f.y / 6.0));
-      float dashZ = road.y * (1.0 - walk.x) * step(abs(off.y), 0.12) * step(0.5, fract(f.x / 6.0));
-      float zebraX = road.x * step(hw.y, dl.y) * step(dl.y, hw.y + 3.5) * step(0.5, fract(f.x / 1.1));
-      float zebraZ = road.y * step(hw.x, dl.x) * step(dl.x, hw.x + 3.5) * step(0.5, fract(f.y / 1.1));
+      float dashX = road.x * (1.0 - walk.y) * band(off.x, 0.12, fw.x) * bands(f.y / 6.0 - 0.75, 0.5, fw.y / 6.0);
+      float dashZ = road.y * (1.0 - walk.x) * band(off.y, 0.12, fw.y) * bands(f.x / 6.0 - 0.75, 0.5, fw.x / 6.0);
+      float zebraX = road.x * step(hw.y, dl.y) * step(dl.y, hw.y + 3.5) * bands(f.x / 1.1 - 0.75, 0.5, fw.x / 1.1);
+      float zebraZ = road.y * step(hw.x, dl.x) * step(dl.x, hw.x + 3.5) * bands(f.y / 1.1 - 0.75, 0.5, fw.y / 1.1);
       float paint = clamp(dashX + dashZ + zebraX + zebraZ, 0.0, 1.0);
       col = mix(col, vec3(0.85, 0.84, 0.78), paint * 0.85);
       float gutter = max(road.x * step(hw.x - ${f(SIDEWALK)} - 0.8, dl.x), road.y * step(hw.y - ${f(SIDEWALK)} - 0.8, dl.y));
-      gPuddle = max(smoothstep(0.6, 0.66, pn), gutter * smoothstep(0.42, 0.5, pn));
+      gPuddle = max(smoothstep(0.6 - pw, 0.66 + pw, pn), gutter * smoothstep(0.42 - pw, 0.5 + pw, pn));
     } else {
-      vec2 slab = abs(fract(f / 1.5) - 0.5);
-      float joint = step(0.46, max(slab.x, slab.y));
+      float joint = 1.0 - (1.0 - bands(f.x / 1.5, 0.08, fw.x / 1.5)) * (1.0 - bands(f.y / 1.5, 0.08, fw.y / 1.5));
       col = pavement * (1.0 - joint * 0.12);
-      float curb = (step(dl.x, hw.x - ${f(SIDEWALK)} + 0.3) * walk.x + step(dl.y, hw.y - ${f(SIDEWALK)} + 0.3) * walk.y);
+      float curb = band(dl.x - (hw.x - ${f(SIDEWALK)} + 0.15), 0.15, fw.x) * walk.x + band(dl.y - (hw.y - ${f(SIDEWALK)} + 0.15), 0.15, fw.y) * walk.y;
       col = mix(col, vec3(0.72, 0.7, 0.66), clamp(curb, 0.0, 1.0));
       rough = mix(0.8, 0.35, uWet);
-      gPuddle = smoothstep(0.66, 0.7, pn);
+      gPuddle = smoothstep(0.66 - pw, 0.7 + pw, pn);
     }
   } else {
     float kind = blockKind(f);
@@ -777,14 +803,13 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
       if (r < 6.0) { col = vec3(0.12, 0.3, 0.38); rough = 0.08; pondWater = 1.0; }
       else if (r < 7.0) { col = vec3(0.7, 0.68, 0.62); paved = 1.0; }
     } else if (kind < 2.5) {
-      vec2 cell = floor(f / 3.0);
-      col = mix(vec3(0.72, 0.69, 0.62), vec3(0.62, 0.6, 0.55), mod(cell.x + cell.y, 2.0));
+      col = mix(vec3(0.72, 0.69, 0.62), vec3(0.62, 0.6, 0.55), checker(f / 3.0, fw / 3.0));
       if (length(q) < 4.5) col = vec3(0.5, 0.48, 0.45);
     } else if (kind < 3.5) {
-      vec2 g = abs(fract(f / 6.0) - 0.5);
-      col = vec3(0.42, 0.43, 0.45) * (0.92 + 0.08 * step(0.47, max(g.x, g.y)));
+      float seam = 1.0 - (1.0 - bands(f.x / 6.0, 0.06, fw.x / 6.0)) * (1.0 - bands(f.y / 6.0, 0.06, fw.y / 6.0));
+      col = vec3(0.42, 0.43, 0.45) * (0.92 + 0.08 * seam);
       rough = mix(0.6, 0.2, uWet);
-      gPuddle = smoothstep(0.64, 0.7, pn);
+      gPuddle = smoothstep(0.64 - pw, 0.7 + pw, pn);
     } else {
       col = pavement;
     }
@@ -793,18 +818,20 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
   // The circus around the origin, with radiating paving.
   float r0 = length(f);
   if (r0 < 46.0) {
-    float ang = atan(f.y, f.x);
+    // turns around the centre; its footprint comes from fw, since fwidth(atan) spikes at the seam
+    float turn = atan(f.y, f.x) / 6.2832;
+    float tw = length(fw) / (6.2832 * max(r0, 1e-3));
     paved = 1.0;
     gPuddle = 0.0;
-    if (r0 < 14.0) col = vec3(0.7, 0.67, 0.6) * (0.92 + 0.08 * step(0.5, fract(ang * 12.0 / 6.2832)));
+    if (r0 < 14.0) col = vec3(0.7, 0.67, 0.6) * (0.92 + 0.08 * bands(turn * 12.0 - 0.75, 0.5, tw * 12.0));
     else if (r0 < 24.0) { col = mix(vec3(0.26, 0.38, 0.17), vec3(0.34, 0.46, 0.2), n); paved = 0.0; }
     else if (r0 < 25.0) col = vec3(0.75, 0.73, 0.68);
     else if (r0 < 40.0) {
       col = asphalt;
       rough = mix(0.85, 0.22, uWet);
-      if (abs(r0 - 32.5) < 0.12 && fract(ang * 24.0 / 6.2832) > 0.5) col = vec3(0.85, 0.84, 0.78);
+      col = mix(col, vec3(0.85, 0.84, 0.78), band(r0 - 32.5, 0.12, max(fw.x, fw.y)) * bands(turn * 24.0 - 0.75, 0.5, tw * 24.0));
       gPuddle = smoothstep(0.6, 0.66, pn);
-    } else col = pavement * (0.94 + 0.06 * step(0.5, fract(ang * 16.0 / 6.2832)));
+    } else col = pavement * (0.94 + 0.06 * bands(turn * 16.0 - 0.75, 0.5, tw * 16.0));
   }
 
   // Street-lamp light pools at night.

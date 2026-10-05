@@ -94,6 +94,10 @@ void main() {
 }`;
 
 const tmp = new THREE.Color();
+const UP = new THREE.Vector3(0, 1, 0);
+const shadowRight = new THREE.Vector3();
+const shadowUp = new THREE.Vector3();
+const shadowFocus = new THREE.Vector3();
 
 function lerpColor(target: THREE.Color, hex: number, k: number): void {
   tmp.setHex(hex);
@@ -302,8 +306,19 @@ export class Environment {
     this.hemi.intensity = this.scalars.hemi;
     this.fog.color.copy(c.fog);
 
-    this.sun.position.copy(focus).addScaledVector(lightDir, 1200);
-    this.sun.target.position.copy(focus);
+    // Slide the shadow map in whole texels: one that follows the focus smoothly samples every
+    // shadow edge at a new offset each frame, and the edges crawl as the camera moves.
+    const texel = (2 * shadowExtent) / this.sun.shadow.mapSize.x;
+    shadowRight.crossVectors(UP, lightDir).normalize();
+    shadowUp.crossVectors(lightDir, shadowRight);
+    const a = focus.dot(shadowRight);
+    const b = focus.dot(shadowUp);
+    shadowFocus
+      .copy(focus)
+      .addScaledVector(shadowRight, Math.round(a / texel) * texel - a)
+      .addScaledVector(shadowUp, Math.round(b / texel) * texel - b);
+    this.sun.position.copy(shadowFocus).addScaledVector(lightDir, 1200);
+    this.sun.target.position.copy(shadowFocus);
     const sc = this.sun.shadow.camera;
     if (sc.right !== shadowExtent) {
       sc.left = -shadowExtent;

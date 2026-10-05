@@ -45,6 +45,14 @@ It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is
 - Press K for the kick: every fold collapses at once with a ripple and a BRAAAM, and you wake up a level.
 - **The café explosion:** fold too hard and stability hits zero. The facades around you crack and blow out into the street, then the dream slows almost to a stop and the stone, glass and shop awnings hang in the air while you walk among them, until the kick arrives on its own. It happens in architect mode too, around the spot you are looking at.
 
+**Take the job** (Heist mode) turns the dream into a game. Go down three already-folded cities through sleep machines, plant an idea in a guarded target on Level 3, then ride the kicks back up and wake before the topside clock runs out. Start it from the title screen or the desk.
+
+- The topside clock starts at 8:00 and runs at full speed on Level 1, half on Level 2 and a quarter on Level 3, so time spent deep is cheap.
+- Follow the beams of light: blue for a sleep machine, gold for a kick, white for your totem, red for the target. Kicks also play a music box you can hear from a few blocks away, and only work on the level where you found them.
+- Projections hurt you instead of throwing you out. You heal in your own time, so healing deep costs less topside time.
+- Die in a dream and you wash up in Limbo, where topside stops but your lucidity runs out unless you find its kick.
+- Each job is a seed: "Share this job" sends someone the same three cities.
+
 **Dream levels** change everything at once: palette, weather, colour grade, ambient drone and time dilation.
 
 | Level | | Time |
@@ -63,12 +71,13 @@ It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is
 | Fold | Drag across a street with the Fold tool (F) | F folds the street ahead up, V drops it away, E rides the street you stand on |
 | Other | R raise brush, O orbit, Z undo, H the Hallway dreamscape, double-click to fly to a spot | H raises or lets go of the rotating hallway, Esc to pause, Q to wake up |
 | Anywhere | Tab switches mode, K is the kick, 1 to 4 pick the level, M mutes | |
+| Heist mode | | As Dream Walk; K uses this level's kick once you have found it, Esc pauses or abandons the job |
 
 On touch screens: in architect mode one finger folds or paints (or orbits with the Orbit tool) and two fingers zoom and pan. In Dream Walk a left-thumb stick walks, dragging anywhere else looks, and buttons jump, fold, ride, raise the hallway, kick and wake.
 
 ### Link parameters
 
-`#s=` seed, `#l=` level (1 to 4), `#t=` time of day (0 is noon, 1 is midnight), `#f=` folds, and `#q=` quality (`low`, `medium`, `high` or `ultra`). The Share button writes all of them for you.
+`#s=` seed, `#l=` level (1 to 4), `#t=` time of day (0 is noon, 1 is midnight), `#f=` folds, and `#q=` quality (`low`, `medium`, `high` or `ultra`). The Share button writes all of them for you. `#job=` is a Heist mode job (its seed), written by "Share this job".
 
 ## How it works
 
@@ -107,9 +116,10 @@ src/
   city/    chunk generator, shaders, materials, slab allocator, streamer
   world/   sky and weather, dream levels, the projections crowd, the rotating hallway, the café explosion
   modes/   architect, dream walk, riding the fold, dreamscape presets
+  game/    Heist mode: the job's rules, and its sleep machines, kicks, totem and target
   fx/      GPU picking, procedural audio, post-processing, the wet-street mirror
   ui/      styles and the HUD totem
-tests/     fold, generator, hallway, ride, mirror and café explosion tests
+tests/     fold, generator, hallway, ride, mirror, café explosion and Heist mode tests
 docs/      the city plan and screenshots
 ```
 

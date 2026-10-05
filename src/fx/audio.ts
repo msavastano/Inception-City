@@ -16,6 +16,13 @@ export class DreamAudio {
   private noise!: AudioBuffer;
   muted = false;
   private lastBraam = 0;
+  // Heist mode: a music box at the kick, a hum at the sleep machine, a heartbeat when hurt
+  private boxGain: GainNode | null = null;
+  private boxPan!: StereoPannerNode;
+  private boxFilter!: BiquadFilterNode;
+  private humGain!: GainNode;
+  private humPan!: StereoPannerNode;
+  private nextBeat = 0;
 
   get ready(): boolean {
     return !!this.ctx;
@@ -252,6 +259,199 @@ export class DreamAudio {
       src.start(at, Math.random() * 1.5);
       src.stop(at + len + 0.05);
     }
+  }
+
+  /**
+   * Heist beacons, every frame: how far (m) and which way (-1 left .. 1 right)
+   * the nearest kick and sleep machine are, or null for none. The kick's music
+   * carries about four blocks; the machine's hum about two.
+   */
+  beacons(kick: { dist: number; pan: number } | null, machine: { dist: number; pan: number } | null): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (!this.boxGain) this.startBeacons(ctx);
+    const t = ctx.currentTime;
+    const k = kick ? Math.max(0, 1 - kick.dist / 260) ** 2 : 0;
+    this.boxGain!.gain.setTargetAtTime(k * 0.34, t, 0.15);
+    this.boxFilter.frequency.setTargetAtTime(500 + 7500 * k, t, 0.15);
+    if (kick) this.boxPan.pan.setTargetAtTime(kick.pan * 0.8, t, 0.1);
+    const m = machine ? Math.max(0, 1 - machine.dist / 130) ** 2 : 0;
+    this.humGain.gain.setTargetAtTime(m * 0.16, t, 0.15);
+    if (machine) this.humPan.pan.setTargetAtTime(machine.pan * 0.8, t, 0.1);
+  }
+
+  /** A heartbeat that quickens as hurt (0..1) rises. Call every frame; 0 is silent. */
+  heartbeat(hurt: number): void {
+    const ctx = this.ctx;
+    if (!ctx || hurt <= 0) return;
+    const t = ctx.currentTime;
+    if (t < this.nextBeat) return;
+    this.nextBeat = t + 1.15 - 0.45 * hurt;
+    for (const [at, f, v] of [
+      [0, 62, 0.5],
+      [0.2, 52, 0.36],
+    ]) {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(f, t + at);
+      o.frequency.exponentialRampToValueAtTime(f * 0.6, t + at + 0.16);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t + at);
+      g.gain.exponentialRampToValueAtTime(v * (0.4 + 0.6 * hurt), t + at + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.22);
+      o.connect(g).connect(this.master);
+      o.start(t + at);
+      o.stop(t + at + 0.25);
+    }
+  }
+
+  /** Something picked up: a rising bell. */
+  chime(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    [659.3, 830.6, 987.8, 1318.5].forEach((f, i) => this.bell(f, t + i * 0.09, 0.16, 1.6));
+  }
+
+  /** A projection's blow. */
+  hurt(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(120, t);
+    o.frequency.exponentialRampToValueAtTime(40, t + 0.25);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.7, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+    o.connect(g).connect(this.master);
+    o.start(t);
+    o.stop(t + 0.4);
+    const n = ctx.createBufferSource();
+    n.buffer = this.noise;
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = 900;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.3, t);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+    n.connect(f).connect(ng).connect(this.master);
+    n.start(t, Math.random());
+    n.stop(t + 0.2);
+  }
+
+  /** Going under: the sedative takes hold and everything sinks. */
+  under(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    for (const [f0, det] of [
+      [220, 0],
+      [221.5, 0],
+      [110, 4],
+    ]) {
+      const o = ctx.createOscillator();
+      o.type = 'triangle';
+      o.detune.value = det;
+      o.frequency.setValueAtTime(f0, t);
+      o.frequency.exponentialRampToValueAtTime(f0 / 4, t + 2.2);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.16, t + 0.3);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 2.6);
+      o.connect(g);
+      g.connect(this.master);
+      g.connect(this.reverb);
+      o.start(t);
+      o.stop(t + 2.7);
+    }
+  }
+
+  /** One music-box tine. */
+  private bell(f: number, at: number, v: number, decay: number, out: AudioNode = this.master): void {
+    const ctx = this.ctx!;
+    for (const [mul, amp] of [
+      [1, 1],
+      [2.76, 0.32],
+      [5.4, 0.12],
+    ]) {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = f * mul;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(v * amp, at + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + decay / mul);
+      o.connect(g);
+      g.connect(out);
+      g.connect(this.reverb);
+      o.start(at);
+      o.stop(at + decay / mul + 0.05);
+    }
+  }
+
+  /** The kick's music box (an original little waltz, looped) and the sleep machine's hum. */
+  private startBeacons(ctx: AudioContext): void {
+    const beat = 0.4;
+    // A minor waltz: MIDI note per beat, 0 holds
+    const tune = [57, 60, 64, 69, 67, 64, 65, 64, 62, 64, 0, 0, 62, 65, 69, 67, 65, 62, 64, 62, 60, 59, 0, 0];
+    const sr = ctx.sampleRate;
+    const len = Math.round(tune.length * beat * sr);
+    const buf = ctx.createBuffer(1, len, sr);
+    const d = buf.getChannelData(0);
+    tune.forEach((note, i) => {
+      if (!note) return;
+      const f = 440 * 2 ** ((note + 12 - 69) / 12);
+      const start = Math.round(i * beat * sr);
+      // tines ring past the end of the loop, so wrap them round to the start
+      for (let j = 0; j < sr * 1.6; j++) {
+        const tt = j / sr;
+        const v =
+          Math.sin(2 * Math.PI * f * tt) * Math.exp(-tt * 2.4) +
+          0.3 * Math.sin(2 * Math.PI * f * 2.76 * tt) * Math.exp(-tt * 7) +
+          0.1 * Math.sin(2 * Math.PI * f * 5.4 * tt) * Math.exp(-tt * 14);
+        d[(start + j) % len] += v * 0.3 * Math.min(1, tt * 400);
+      }
+    });
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    this.boxFilter = ctx.createBiquadFilter();
+    this.boxFilter.type = 'lowpass';
+    this.boxFilter.frequency.value = 600;
+    this.boxPan = ctx.createStereoPanner();
+    this.boxGain = ctx.createGain();
+    this.boxGain.gain.value = 0;
+    src.connect(this.boxFilter).connect(this.boxPan).connect(this.boxGain);
+    this.boxGain.connect(this.master);
+    this.boxGain.connect(this.reverb);
+    src.start();
+
+    this.humPan = ctx.createStereoPanner();
+    this.humGain = ctx.createGain();
+    this.humGain.gain.value = 0;
+    const tremolo = ctx.createGain();
+    tremolo.gain.value = 0.7;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 3.1;
+    const lfoAmt = ctx.createGain();
+    lfoAmt.gain.value = 0.3;
+    lfo.connect(lfoAmt).connect(tremolo.gain);
+    lfo.start();
+    for (const [f, type] of [
+      [98, 'sine'],
+      [196.4, 'triangle'],
+      [293.7, 'sine'],
+    ] as const) {
+      const o = ctx.createOscillator();
+      o.type = type;
+      o.frequency.value = f;
+      o.connect(tremolo);
+      o.start();
+    }
+    tremolo.connect(this.humPan).connect(this.humGain).connect(this.master);
   }
 
   step(): void {

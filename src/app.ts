@@ -7,6 +7,8 @@ import { CityStreamer } from './city/streamer';
 import { DreamAudio } from './fx/audio';
 import { Picker } from './fx/picking';
 import { PostFX } from './fx/post';
+import { HeistEvent, HeistRun, Item, KickResult, LIMBO, LUCIDITY_WITH_TOTEM, LUCIDITY_WITHOUT, Outcome, SCAPES, SPAWN, Spot, TARGET_DEPTH, levelSeed } from './game/heist';
+import { HeistMarks } from './game/marks';
 import { ArchitectMode, Tool } from './modes/architect';
 import { DreamContext } from './modes/context';
 import { DreamWalk } from './modes/dreamwalk';
@@ -35,8 +37,26 @@ const QUALITY: Record<QualityName, { pr: number; shadow: number; extent: number;
 const COLLAPSE_AT = 0.995;
 const ORDER: QualityName[] = ['low', 'medium', 'high', 'ultra'];
 const MAX_CHUNKS = 150;
+/** Heist mode: the target's guards, each level's share of the crowd, and how wary the crowd is down there. */
+const GUARDS = 7;
+const CROWD_AT_DEPTH = [0.5, 0.75, 1, 0.4];
+const ALERT_AT_DEPTH = [0, 0.1, 0.2, 0.15];
+/** Running past projections on Level 2 and below makes them suspicious. */
+const RUN_ALERT = 0.35;
+const RATE_LABEL = ['Topside runs at full speed', 'Topside runs at half speed', 'Topside runs at a quarter speed', 'Topside is stopped in Limbo'];
+const HEIST_HINT = 'Follow the light · WASD walk · Shift run · K kick (once you have found one) · F fold ahead · E ride the fold · Esc pause';
+const HEIST_TOUCH_HINT = 'Follow the light. Left thumb walks, right thumb looks. Kick once you have found one.';
+/** Seconds to fade out (and back in) when the job moves between dreams. */
+const FADE = 0.6;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+
+/** A direction relative to where you face, in words (angle in radians, 0 ahead, positive to the right). */
+function bearing(a: number): string {
+  const names = ['ahead', 'ahead, to the right', 'to your right', 'behind you, to the right', 'behind you', 'behind you, to the left', 'to your left', 'ahead, to the left'];
+  const i = Math.round((((a / (Math.PI * 2)) * 8) % 8) + 8) % 8;
+  return names[i];
+}
 
 function fmtDuration(sec: number): string {
   if (!Number.isFinite(sec)) return '∞';
@@ -71,7 +91,17 @@ export class App implements DreamContext {
   readonly crowd: Projections;
   readonly hallway = new Hallway();
   readonly collapse = new Collapse(QUALITY.ultra.shards);
+  readonly marks: HeistMarks;
+  readonly guards: Projections;
   private totem: Totem;
+  /** The job in progress (Heist mode), or null. */
+  private run: HeistRun | null = null;
+  private jobSeed: number;
+  private transit: { t: number; hold: number; then: (() => void) | null } | null = null;
+  private hurtFlash = 0;
+  private lastNeedTotem = -100;
+  /** When the current dream of the job appeared (its things grow in from then). */
+  private dreamBorn = 0;
   time = 0;
   snap = true;
   mode: Mode = 'architect';
@@ -101,6 +131,12 @@ export class App implements DreamContext {
   constructor() {
     const params = new URLSearchParams(location.hash.slice(1));
     this.seed = Number(params.get('s')) || Math.floor(Math.random() * 1e6);
+    this.jobSeed = Number(params.get('job')) || Math.floor(Math.random() * 1e6);
+    if (params.has('job')) {
+      // a shared job: taking it is the main way in
+      $('go-job').classList.add('primary');
+      $('go-architect').classList.remove('primary');
+    }
     const mobile = matchMedia('(pointer: coarse)').matches;
     const forced = params.get('q') as QualityName | null;
     this.quality = forced && forced in QUALITY ? forced : mobile ? 'medium' : 'high';
@@ -127,13 +163,28 @@ export class App implements DreamContext {
     this.scene.add(this.makeTotem());
     this.crowd = new Projections(this.streamer.propMaterial, this.streamer.propDepth, QUALITY.ultra.crowd);
     this.crowd.setCount(this.crowdCount, 0, 0);
-    this.crowd.onCaught = () => {
-      if (this.mode === 'walk') {
+    this.crowd.onCaught = (x, z) => {
+      if (this.run) this.struck(x, z);
+      else if (this.mode === 'walk') {
         this.kick('The projections found you');
         setTimeout(() => this.setMode('architect'), 700);
       }
     };
     this.scene.add(this.crowd.mesh);
+    // the target's bodyguards: few, in navy, and they go for anyone who comes close
+    this.guards = new Projections(this.streamer.propMaterial, this.streamer.propDepth, GUARDS, {
+      spread: 5,
+      leash: 110,
+      respawnMin: 0,
+      near: 14,
+      far: 50,
+      zeal: 1,
+      tones: [0.5, 0.74],
+    });
+    this.guards.onCaught = (x, z) => this.struck(x, z);
+    this.scene.add(this.guards.mesh);
+    this.marks = new HeistMarks(this.streamer.propMaterial, this.streamer.propDepth);
+    this.scene.add(this.marks.group);
     this.scene.add(this.hallway.mesh);
     this.scene.add(this.collapse.mesh);
 
@@ -141,7 +192,7 @@ export class App implements DreamContext {
     this.architect = new ArchitectMode(this);
     this.walk = new DreamWalk(this);
     this.walk.onPause = () => {
-      if (this.mode === 'walk') $('pause').hidden = false;
+      if (this.mode === 'walk' && !this.run?.outcome) $('pause').hidden = false;
     };
     this.totem = new Totem($<HTMLCanvasElement>('totem'));
 
@@ -219,11 +270,18 @@ export class App implements DreamContext {
     this.collapse.start(f.x, f.z, planShards(near, f.x, f.z, QUALITY[this.quality].shards, Math.floor(this.time * 1000)));
     this.audio.shatter();
     this.flash = Math.max(this.flash, 0.3);
+    // in a job the blast hurts; the kick that follows is free (see heistCrash)
+    if (this.run && !this.run.outcome) {
+      this.run.blast();
+      this.hurtFlash = 1;
+    }
   }
 
   // ---------------------------------------------------------------- modes
 
   setMode(mode: Mode): void {
+    // a job is walked from start to finish: leaving it goes through leaveJob()
+    if (this.run && mode === 'architect') return;
     // `mode` starts out as 'architect' before either mode has been entered, so check the mode is actually live
     const entered = mode === 'walk' ? this.walk.active : this.architect.active;
     if (mode === this.mode && entered) return;
@@ -319,6 +377,350 @@ export class App implements DreamContext {
     return this.mode === 'walk' ? { x: this.walk.x, z: this.walk.z } : this.architect.focus();
   }
 
+  // ---------------------------------------------------------------- heist
+
+  /** Take a job: Level 1 of a city made from its seed, already folded. Called from a click (pointer lock). */
+  private startJob(seed: number): void {
+    for (const id of ['intro', 'job-brief', 'job-end', 'pause']) $(id).hidden = true;
+    document.body.classList.remove('intro', 'has-totem');
+    document.body.classList.add('heist');
+    this.audio.start();
+    this.started = true;
+    this.pendingPreset = null;
+    this.jobSeed = seed;
+    this.run = new HeistRun(seed);
+    this.transit = null;
+    this.post.u.uDim.value = 0;
+    const first = this.mode !== 'walk';
+    this.setMode('walk');
+    // entering walk mode asks for the pointer itself; a second job from the end card has to ask again
+    if (!first) this.walk.lock();
+    // the first time in, swoop down from wherever the camera was
+    this.loadDream(0, SPAWN, first);
+    $('wake').textContent = 'Abandon the job';
+    this.hint(document.body.classList.contains('touch') ? HEIST_TOUCH_HINT : HEIST_HINT);
+    this.toast('The job', 'Find your totem, then a sleep machine. Follow the light.');
+  }
+
+  /** Build one level of the job around the dreamer: its own city, its dreamscape, its things, its crowd. */
+  private loadDream(depth: number, at: Spot, swoop = false): void {
+    const run = this.run!;
+    this.collapse.stop();
+    if (this.hallway.open) this.walk.collapseHallway();
+    this.folds.reset();
+    this.streamer.resetAll(levelSeed(run.seed, depth));
+    this.setLevel(depth);
+    this.env.applyInstant();
+    const scape = PRESETS.find((p) => p.id === SCAPES[depth]);
+    for (const f of scape?.folds ?? []) {
+      // already folded when you arrive: no animation, so no strain on the dream
+      const fold = this.folds.add(f.hx, f.hz, f.nx, f.nz, f.angle, f.radius, 2.4);
+      fold.angle = fold.target;
+    }
+    this.folds.update(0);
+    this.instability = 0;
+    run.place(depth, (x, z) => {
+      const c = this.streamer.collide(x, z, 1);
+      return Math.hypot(c.x - x, c.z - z) < 1e-3;
+    });
+    this.dreamBorn = this.time;
+    this.marks.show(run.here, run.planted, this.dreamBorn);
+    this.crowd.setCount(Math.round(this.crowdCount * CROWD_AT_DEPTH[depth]), at.x, at.z);
+    this.crowd.scatter(at.x, at.z, 40);
+    const target = depth === TARGET_DEPTH ? run.target : undefined;
+    this.guards.setCount(target ? GUARDS : 0, target?.x ?? 0, target?.z ?? 0);
+    if (target) this.guards.scatter(target.x, target.z, 8);
+    this.walk.teleport(at.x, at.z, at.yaw, swoop);
+  }
+
+  /** Fade to black, change dreams in the dark, fade back in. */
+  private fadeThrough(then: () => void, hold = 0.5): void {
+    this.transit = { t: 0, hold, then };
+  }
+
+  /** K (or the touch Kick button): the city's kick, or in a job, this level's kick if you carry it. */
+  private pressKick(): void {
+    const run = this.run;
+    if (!run) {
+      this.kick();
+      return;
+    }
+    if (run.outcome || this.transit) return;
+    // K during the café explosion brings its kick forward, as it does outside a job
+    if (this.collapse.blasting) this.heistCrash();
+    else this.applyKick(run.kick());
+  }
+
+  /** The kick at the end of the café explosion: free, unless the blast killed you. */
+  private heistCrash(): void {
+    if (!this.run || this.transit) return;
+    if (this.run.outcome) this.collapse.release();
+    else this.applyKick(this.run.crash());
+  }
+
+  private applyKick(r: KickResult): void {
+    const run = this.run!;
+    switch (r.type) {
+      case 'none':
+        if (!run.outcome) this.toast('No kick', run.depth === LIMBO ? 'Find the way out first.' : "You haven't found this level's kick. Listen for the music.");
+        break;
+      case 'confirm':
+        this.toast('Wake up now?', 'The idea is not planted. Press K again to wake up and give up the job.');
+        break;
+      case 'up':
+        this.kickFx();
+        this.fadeThrough(() => {
+          this.loadDream(r.depth, r.at);
+          this.toast(LEVELS[r.depth].name, r.fromLimbo ? 'Back from Limbo, badly hurt. Heal before you push on.' : 'You wake beside the machine you went under at.');
+        });
+        break;
+      case 'limbo':
+        this.kickFx();
+        this.fadeThrough(() => this.enterLimbo(r.at), 1.2);
+        break;
+      case 'wake':
+        this.kickFx();
+        this.fadeThrough(() => this.endJob(r.outcome), 0.6);
+        break;
+    }
+  }
+
+  private kickFx(): void {
+    this.collapse.release();
+    this.audio.kick();
+    const f = this.focus();
+    U.uRipple.value.set(f.x, f.z, this.time, 7);
+    this.flash = 0.85;
+    this.crowd.calm();
+    this.guards.calm();
+  }
+
+  private enterLimbo(at: Spot): void {
+    const run = this.run!;
+    this.loadDream(LIMBO, at);
+    this.toast(
+      'Limbo',
+      run.hasTotem ? 'You died in the dream. Find the way out. Your totem will keep you lucid for a while.' : 'You died in the dream. Without your totem you will not stay lucid for long.',
+    );
+  }
+
+  /** A projection reached the dreamer. */
+  private struck(x: number, z: number): void {
+    const run = this.run;
+    if (!run || run.outcome || this.transit || this.mode !== 'walk') return;
+    const r = run.hit();
+    if (r === 'none') return;
+    this.audio.hurt();
+    this.walk.shove(x, z);
+    this.hurtFlash = 1;
+    if (r === 'dead') {
+      this.flash = 0.6;
+      this.fadeThrough(() => this.enterLimbo(run.fall()), 1.2);
+    }
+  }
+
+  private onHeistEvent(e: HeistEvent): void {
+    const run = this.run!;
+    switch (e.type) {
+      case 'pickup': {
+        this.audio.chime();
+        this.marks.show(run.here, run.planted, this.dreamBorn);
+        if (e.item.kind === 'totem') {
+          document.body.classList.add('has-totem');
+          this.toast('Your totem', 'Now you can tell how stable the dream is, and you can go deeper than Level 2.');
+        } else if (run.depth === LIMBO) {
+          this.toast('The way out', `Press K to wake into ${LEVELS[run.fellFrom].name}.`);
+        } else {
+          this.toast('A kick', `It will wake you from ${LEVELS[run.depth].name} whenever you press K here.`);
+        }
+        break;
+      }
+      case 'under':
+        this.audio.under();
+        this.flash = Math.max(this.flash, 0.2);
+        this.fadeThrough(() => {
+          const at = run.goUnder();
+          this.loadDream(run.depth, at);
+          this.toast(LEVELS[run.depth].name, run.depth === TARGET_DEPTH ? 'Topside runs at a quarter speed. The target is here.' : 'Topside runs at half speed here.');
+        }, 0.9);
+        break;
+      case 'needTotem':
+        if (this.time - this.lastNeedTotem > 4) {
+          this.lastNeedTotem = this.time;
+          this.toast('Not without your totem', 'Never go this deep without it. It is up on Level 1.');
+        }
+        break;
+      case 'planted':
+        this.audio.braam(1);
+        this.flash = Math.max(this.flash, 0.35);
+        this.guards.calm();
+        this.marks.show(run.here, run.planted, this.dreamBorn);
+        this.toast('Inception', 'The idea has taken root. Now ride the kicks home.');
+        break;
+      case 'over':
+        this.endJob(e.outcome);
+        break;
+    }
+  }
+
+  /** The end card. */
+  private endJob(outcome: Outcome): void {
+    const run = this.run!;
+    if (document.pointerLockElement) document.exitPointerLock();
+    $('pause').hidden = true;
+    $('toast').classList.remove('show');
+    const card: Record<Outcome, [string, string, string]> = {
+      won: ['Job done', 'Inception', `You planted the idea and woke up with ${fmtDuration(run.topside)} of topside time to spare.`],
+      time: ['Job failed', 'The plane landed', 'The topside clock ran out while you were still under.'],
+      woke: ['Job failed', 'You woke too soon', 'The idea was never planted.'],
+      lost: ['Job failed', 'Lost in Limbo', 'You forgot you were dreaming.'],
+      abandoned: ['Job abandoned', 'You walked away', ''],
+    };
+    const [kicker, title, sub] = card[outcome];
+    $('job-end-kicker').textContent = kicker;
+    $('job-end-title').textContent = title;
+    $('job-end-sub').textContent = sub;
+    const stats: [string, string][] = [
+      ['Topside left', fmtDuration(run.topside)],
+      ['Time under', fmtDuration(run.played)],
+      ['Idea', run.planted ? 'Planted' : 'Not planted'],
+    ];
+    if (outcome === 'won') {
+      const key = `inception-job-${run.seed}`;
+      let best = 0;
+      try {
+        best = Number(localStorage.getItem(key)) || 0;
+        if (run.topside > best) localStorage.setItem(key, String(run.topside));
+      } catch {
+        // no storage (private window): no record kept
+      }
+      stats.push(['Best for this job', fmtDuration(Math.max(best, run.topside)) + (run.topside > best ? ' (new)' : '')]);
+    }
+    const dl = $('job-stats');
+    dl.innerHTML = '';
+    for (const [k, v] of stats) {
+      const dt = document.createElement('dt');
+      dt.textContent = k;
+      const dd = document.createElement('dd');
+      dd.textContent = v;
+      dl.append(dt, dd);
+    }
+    $('job-end').hidden = false;
+  }
+
+  /** Leave the job (from the end card or the pause menu) and go back to the architect's city. */
+  private leaveJob(): void {
+    this.run?.abandon();
+    this.run = null;
+    this.transit = null;
+    for (const id of ['job-end', 'pause']) $(id).hidden = true;
+    document.body.classList.remove('heist', 'has-totem');
+    $('wake').textContent = 'Wake up (Q)';
+    $('objective').textContent = '';
+    this.post.u.uDim.value = 0;
+    this.post.u.uHurt.value = 0;
+    this.hurtFlash = 0;
+    this.walk.canSprint = true;
+    this.audio.beacons(null, null);
+    this.marks.clear();
+    this.guards.setCount(0, 0, 0);
+    this.collapse.stop();
+    if (this.hallway.open) this.walk.collapseHallway();
+    this.folds.reset();
+    this.streamer.resetAll(this.seed);
+    this.setLevel(0);
+    this.env.applyInstant();
+    this.instability = 0;
+    this.crowd.setCount(this.crowdCount, this.walk.x, this.walk.z);
+    this.crowd.scatter(this.walk.x, this.walk.z, 40);
+    this.setMode('architect');
+  }
+
+  private shareJob(): void {
+    const seed = this.run?.seed ?? this.jobSeed;
+    this.copyLink(new URLSearchParams({ job: String(seed) }), 'Job link copied', 'Anyone who opens it can run this exact job.', 'Copy this job link');
+  }
+
+  /** Every frame of a job: the run's clock and events, the beacons' sound, the hurt picture. */
+  private updateHeist(dt: number): void {
+    const run = this.run;
+    if (!run) return;
+    if (!this.heistPaused && !this.transit) {
+      const hunted = this.crowd.hunting + this.guards.hunting > 0;
+      for (const e of run.update(dt, this.walk.x, this.walk.z, hunted)) this.onHeistEvent(e);
+    }
+    this.walk.canSprint = !run.limping;
+
+    // where the kick and the machine are, as sound
+    const right = { x: -Math.cos(this.walk.yaw), z: Math.sin(this.walk.yaw) };
+    const beacon = (kind: 'kick' | 'machine') => {
+      const it = run.here.find((i) => i.kind === kind && !i.taken);
+      if (!it || run.outcome) return null;
+      const dx = it.x - this.walk.x;
+      const dz = it.z - this.walk.z;
+      const dist = Math.hypot(dx, dz);
+      return { dist, pan: dist > 1e-3 ? (dx * right.x + dz * right.z) / dist : 0 };
+    };
+    this.audio.beacons(beacon('kick'), beacon('machine'));
+
+    let hurt: number;
+    if (run.depth === LIMBO) hurt = 1 - Math.min(1, run.lucidity / 30);
+    else hurt = 1 - Math.min(1, run.health / 0.5);
+    if (run.outcome) hurt = 0;
+    this.audio.heartbeat(hurt);
+    this.hurtFlash *= Math.exp(-dt * 2.2);
+    this.post.u.uHurt.value = Math.max(this.hurtFlash * 0.9, hurt * 0.55);
+  }
+
+  /** While a job holds still: paused, or over. (Changing dreams only stops its clock.) */
+  private get heistPaused(): boolean {
+    const run = this.run;
+    return !!run && (!!run.outcome || !$('pause').hidden);
+  }
+
+  private updateJobHud(): void {
+    const run = this.run!;
+    $('job-topside').textContent = fmtDuration(run.topside);
+    $('job-topside').parentElement!.classList.toggle('low', run.topside < 60);
+    $('job-rate').textContent = RATE_LABEL[run.depth];
+    Array.from($('job-depth').children).forEach((el, i) => el.classList.toggle('on', i === run.depth));
+    const limbo = run.depth === LIMBO;
+    $('job-meter-k').textContent = limbo ? 'Lucidity' : 'Health';
+    const v = limbo ? run.lucidity / (run.hasTotem ? LUCIDITY_WITH_TOTEM : LUCIDITY_WITHOUT) : run.health;
+    const bar = $('job-meter');
+    bar.style.width = `${Math.round(Math.max(0, Math.min(1, v)) * 100)}%`;
+    bar.style.background = v > 0.6 ? 'var(--cold)' : v > 0.3 ? 'var(--accent)' : 'var(--danger)';
+    for (const el of $('job-carry').querySelectorAll<HTMLElement>('span')) {
+      const c = el.dataset.c!;
+      const have = c === 'totem' ? run.hasTotem : c === 'idea' ? run.planted : run.kicks.has(Number(c.slice(1)));
+      el.classList.toggle('have', have);
+      if (c === 'k3') el.hidden = !limbo;
+    }
+    // the main thing you're after gets a distance and a direction (kicks you find by ear)
+    const want = this.objectiveItem();
+    let where = '';
+    if (want) {
+      const dx = want.x - this.walk.x;
+      const dz = want.z - this.walk.z;
+      const ahead = dx * Math.sin(this.walk.yaw) + dz * Math.cos(this.walk.yaw);
+      const right = -dx * Math.cos(this.walk.yaw) + dz * Math.sin(this.walk.yaw);
+      where = ` · ${Math.round(Math.hypot(dx, dz) / 10) * 10} m ${bearing(Math.atan2(right, ahead))}`;
+    }
+    $('objective').textContent = run.objective() + where;
+  }
+
+  /** What the objective line is pointing you at, if it's something to walk to (not a kick: those you listen for). */
+  private objectiveItem(): Item | undefined {
+    const run = this.run!;
+    if (run.outcome || run.planted) return undefined;
+    const find = (kind: Item['kind']) => run.here.find((i) => i.kind === kind && !i.taken);
+    if (run.depth === LIMBO) return undefined;
+    if (run.depth === TARGET_DEPTH) return find('target');
+    if (run.depth === 0 && !run.hasTotem) return find('totem');
+    if (run.depth === 1 && !run.hasTotem) return undefined;
+    return find('machine');
+  }
+
   // ---------------------------------------------------------------- UI
 
   private toast(title: string, sub = ''): void {
@@ -357,6 +759,21 @@ export class App implements DreamContext {
   private bindUI(): void {
     $('go-architect').addEventListener('click', () => this.start('architect'));
     $('go-walk').addEventListener('click', () => this.start('walk'));
+    $('go-job').addEventListener('click', () => {
+      $('intro').hidden = true;
+      $('job-brief').hidden = false;
+    });
+    // the desk can take a job too, once you're already in the city
+    $('panel-job').addEventListener('click', () => ($('job-brief').hidden = false));
+    $('job-back').addEventListener('click', () => {
+      $('job-brief').hidden = true;
+      if (!this.started) $('intro').hidden = false;
+    });
+    $('job-go').addEventListener('click', () => this.startJob(this.jobSeed));
+    $('job-again').addEventListener('click', () => this.startJob(this.run?.seed ?? this.jobSeed));
+    $('job-new').addEventListener('click', () => this.startJob(Math.floor(Math.random() * 1e6)));
+    $('job-share').addEventListener('click', () => this.shareJob());
+    $('job-leave').addEventListener('click', () => this.leaveJob());
     for (const b of document.querySelectorAll<HTMLButtonElement>('#mode-seg button')) b.addEventListener('click', () => this.setMode(b.dataset.mode as Mode));
     for (const b of document.querySelectorAll<HTMLButtonElement>('#tool-seg button')) b.addEventListener('click', () => this.setTool(b.dataset.tool as Tool));
     $<HTMLInputElement>('snap').addEventListener('change', (e) => (this.snap = (e.target as HTMLInputElement).checked));
@@ -425,7 +842,7 @@ export class App implements DreamContext {
       $('pause').hidden = true;
       this.walk.lock();
     });
-    $('wake').addEventListener('click', () => this.setMode('architect'));
+    $('wake').addEventListener('click', () => (this.run ? this.leaveJob() : this.setMode('architect')));
     for (const b of document.querySelectorAll<HTMLButtonElement>('#touch-ui button')) {
       b.addEventListener('click', () => {
         const a = b.dataset.touch;
@@ -433,7 +850,7 @@ export class App implements DreamContext {
         if (a === 'fold') this.walk.foldAhead(true);
         if (a === 'ride') this.walk.ride();
         if (a === 'hall') this.walk.toggleHallway();
-        if (a === 'kick') this.kick();
+        if (a === 'kick') this.pressKick();
         if (a === 'wake') this.setMode('architect');
       });
     }
@@ -444,22 +861,23 @@ export class App implements DreamContext {
       switch (e.code) {
         case 'Tab':
           e.preventDefault();
-          this.setMode(this.mode === 'walk' ? 'architect' : 'walk');
+          if (!this.run) this.setMode(this.mode === 'walk' ? 'architect' : 'walk');
           break;
         case 'KeyK':
-          this.kick();
+          this.pressKick();
           break;
         case 'Digit1':
         case 'Digit2':
         case 'Digit3':
         case 'Digit4':
-          this.setLevel(Number(e.code.slice(5)) - 1);
+          if (!this.run) this.setLevel(Number(e.code.slice(5)) - 1);
           break;
         case 'KeyM':
           $('mute').click();
           break;
         case 'KeyZ':
-          this.undo();
+          // in a job the dreamscape's folds are part of the level, not yours to undo
+          if (!this.run) this.undo();
           break;
         case 'KeyF':
           if (this.mode === 'walk') this.walk.foldAhead(true);
@@ -502,6 +920,11 @@ export class App implements DreamContext {
     });
     const f = this.folds.serialize();
     if (f) params.set('f', f);
+    this.copyLink(params, 'Dream link copied', 'Anyone who opens it gets this exact city, folded the same way.', 'Copy this dream link');
+  }
+
+  /** Put a link to this page with the given hash on the clipboard (or show it, if that fails). */
+  private copyLink(params: URLSearchParams, done: string, doneSub: string, failed: string): void {
     // Inside an embed (or a local file) the page's own address can't carry the dream, so link to the public build.
     const embedded = window.self !== window.top || !location.protocol.startsWith('http');
     const base = embedded ? PUBLIC_URL : `${location.origin}${location.pathname}`;
@@ -511,10 +934,10 @@ export class App implements DreamContext {
     } catch {
       // some sandboxed frames refuse history changes; the copied link is what matters
     }
-    const done = () => this.toast('Dream link copied', 'Anyone who opens it gets this exact city, folded the same way.');
-    const failed = () => this.toast('Copy this dream link', url);
-    if (navigator.clipboard) navigator.clipboard.writeText(url).then(done, failed);
-    else failed();
+    const ok = () => this.toast(done, doneSub);
+    const no = () => this.toast(failed, url);
+    if (navigator.clipboard) navigator.clipboard.writeText(url).then(ok, no);
+    else no();
   }
 
   private renderFoldList(): void {
@@ -598,7 +1021,24 @@ export class App implements DreamContext {
     this.timer.update();
     const dt = Math.min(this.timer.getDelta(), 0.05);
     // While the dream collapses it runs in slow motion (wdt); the dreamer and the cameras keep real time.
-    if (this.collapse.update(dt)) this.kick('Stability hit zero');
+    if (this.collapse.update(dt)) {
+      if (this.run) this.heistCrash();
+      else this.kick('Stability hit zero');
+    }
+    if (this.transit) {
+      const tr = this.transit;
+      tr.t += dt;
+      if (tr.then && tr.t >= FADE) {
+        const then = tr.then;
+        tr.then = null;
+        then();
+      }
+      this.post.u.uDim.value = tr.t < FADE ? tr.t / FADE : Math.max(0, 1 - (tr.t - FADE - tr.hold) / FADE);
+      if (tr.t >= FADE * 2 + tr.hold) {
+        this.transit = null;
+        this.post.u.uDim.value = 0;
+      }
+    }
     const slow = this.collapse.timeScale;
     const wdt = dt * slow;
     this.time += wdt;
@@ -653,7 +1093,18 @@ export class App implements DreamContext {
 
     // inside the hallway the dreamer is out of the projections' reach
     const dreamer = this.mode === 'walk' && !this.hallway.rider ? focus : null;
-    this.crowd.update(wdt, focus.x, focus.z, dreamer, this.instability, (x, z, r) => this.streamer.collide(x, z, r));
+    const collide = (x: number, z: number, r: number) => this.streamer.collide(x, z, r);
+    const run = this.run;
+    if (!run) {
+      this.crowd.update(wdt, focus.x, focus.z, dreamer, this.instability, collide);
+    } else if (!this.heistPaused) {
+      // deeper dreams are warier, and from Level 2 down running past people gets you noticed
+      const running = run.depth >= 1 && Math.hypot(this.walk.vx, this.walk.vz) > 8;
+      this.crowd.update(wdt, focus.x, focus.z, dreamer, this.instability, collide, ALERT_AT_DEPTH[run.depth] + (running ? RUN_ALERT : 0));
+      const target = run.depth === TARGET_DEPTH ? run.target : undefined;
+      if (target) this.guards.update(wdt, target.x, target.z, dreamer, this.instability, collide, run.planted ? 0 : 1);
+    }
+    this.updateHeist(dt);
 
     const fw = new THREE.Vector3();
     if (this.mode === 'walk') fw.copy(this.camera.position);
@@ -691,6 +1142,7 @@ export class App implements DreamContext {
     this.statsClock += dt;
     if (this.statsClock < 0.25) return;
     this.statsClock = 0;
+    if (this.run) this.updateJobHud();
     if (this.fpsTime > 0.5) {
       this.fps = Math.round(this.fpsFrames / this.fpsTime);
       this.fpsFrames = 0;

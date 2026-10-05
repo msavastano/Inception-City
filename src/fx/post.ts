@@ -18,6 +18,7 @@ const GradeShader = {
     uVignette: { value: 0.32 },
     uGrain: { value: 0.035 },
     uDim: { value: 0 },
+    uHurt: { value: 0 },
   },
   vertexShader: /* glsl */ `
 varying vec2 vUv;
@@ -33,6 +34,7 @@ uniform float uFlash;
 uniform float uVignette;
 uniform float uGrain;
 uniform float uDim;
+uniform float uHurt;
 varying vec2 vUv;
 float h(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 void main() {
@@ -49,6 +51,9 @@ void main() {
   col *= mix(vec3(0.94, 1.0, 1.04), uTint, smoothstep(0.1, 0.8, l));
   col = (col - 0.5) * uContrast + 0.5;
   col *= 1.0 - uVignette * smoothstep(0.08, 0.55, r2 * 1.6);
+  // hurt: the edges of the picture run red
+  float hurtEdge = uHurt * smoothstep(0.04, 0.5, r2 * 1.6);
+  col = mix(col, col * vec3(0.9, 0.2, 0.16) + vec3(0.16, 0.0, 0.0), hurtEdge);
   col += (h(vUv * 913.0 + fract(uTime) * 71.0) - 0.5) * uGrain;
   col = mix(col, vec3(1.0), uFlash);
   col *= 1.0 - uDim;

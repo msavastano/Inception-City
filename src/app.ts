@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { MAX_FOLDS } from './core/config';
+import { COLLAPSE_RADIUS, MAX_FOLDS } from './core/config';
 import { Fold, FoldStack, foldPoint } from './core/fold';
 import { totemGeometry } from './city/geometry';
 import { U } from './city/materials';
@@ -12,6 +12,7 @@ import { DreamContext } from './modes/context';
 import { DreamWalk } from './modes/dreamwalk';
 import { PRESETS, Preset } from './modes/presets';
 import { Totem } from './ui/totem';
+import { Collapse, planShards } from './world/collapse';
 import { Environment } from './world/environment';
 import { HALL_LENGTH, Hallway } from './world/hallway';
 import { Projections } from './world/projections';
@@ -23,12 +24,15 @@ type QualityName = 'low' | 'medium' | 'high' | 'ultra';
 const PUBLIC_URL = 'https://msavastano.github.io/Inception-City/';
 
 // mirror: resolution of the wet-street reflection as a fraction of the screen (0 = lamp glints only)
-const QUALITY: Record<QualityName, { pr: number; shadow: number; extent: number; bloom: boolean; view: number; props: number; chunks: number; crowd: number; mirror: number }> = {
-  ultra: { pr: 2, shadow: 4096, extent: 460, bloom: true, view: 1300, props: 650, chunks: 150, crowd: 900, mirror: 0.5 },
-  high: { pr: 1.5, shadow: 2048, extent: 380, bloom: true, view: 1050, props: 480, chunks: 120, crowd: 600, mirror: 0.5 },
-  medium: { pr: 1, shadow: 2048, extent: 320, bloom: true, view: 820, props: 360, chunks: 90, crowd: 400, mirror: 0.35 },
-  low: { pr: 0.75, shadow: 0, extent: 260, bloom: false, view: 620, props: 240, chunks: 60, crowd: 180, mirror: 0 },
+// shards: pieces of wall the café explosion throws when stability hits zero
+const QUALITY: Record<QualityName, { pr: number; shadow: number; extent: number; bloom: boolean; view: number; props: number; chunks: number; crowd: number; mirror: number; shards: number }> = {
+  ultra: { pr: 2, shadow: 4096, extent: 460, bloom: true, view: 1300, props: 650, chunks: 150, crowd: 900, mirror: 0.5, shards: 7000 },
+  high: { pr: 1.5, shadow: 2048, extent: 380, bloom: true, view: 1050, props: 480, chunks: 120, crowd: 600, mirror: 0.5, shards: 5000 },
+  medium: { pr: 1, shadow: 2048, extent: 320, bloom: true, view: 820, props: 360, chunks: 90, crowd: 400, mirror: 0.35, shards: 3200 },
+  low: { pr: 0.75, shadow: 0, extent: 260, bloom: false, view: 620, props: 240, chunks: 60, crowd: 180, mirror: 0, shards: 1600 },
 };
+/** Instability at which the dream collapses (the HUD reads 0% stability). */
+const COLLAPSE_AT = 0.995;
 const ORDER: QualityName[] = ['low', 'medium', 'high', 'ultra'];
 const MAX_CHUNKS = 150;
 
@@ -66,6 +70,7 @@ export class App implements DreamContext {
   readonly walk: DreamWalk;
   readonly crowd: Projections;
   readonly hallway = new Hallway();
+  readonly collapse = new Collapse(QUALITY.ultra.shards);
   private totem: Totem;
   time = 0;
   snap = true;
@@ -130,6 +135,7 @@ export class App implements DreamContext {
     };
     this.scene.add(this.crowd.mesh);
     this.scene.add(this.hallway.mesh);
+    this.scene.add(this.collapse.mesh);
 
     this.post = new PostFX(this.renderer, this.scene, this.camera, mobile || this.quality === 'low' ? 0 : 4);
     this.architect = new ArchitectMode(this);
@@ -183,6 +189,7 @@ export class App implements DreamContext {
   }
 
   kick(reason?: string): void {
+    this.collapse.release();
     this.audio.kick();
     if (this.hallway.active) this.walk.collapseHallway();
     const f = this.focus();
@@ -197,6 +204,21 @@ export class App implements DreamContext {
     } else {
       this.toast(reason ?? 'Kick', 'The dream snaps flat.');
     }
+  }
+
+  /** Stability hit zero: the facades blow out around the dreamer and hang in slow motion until the kick. */
+  private blowUp(): void {
+    let f = this.focus();
+    if (this.mode === 'architect') {
+      // the architect is looking at the middle of the screen, which may be on a folded flap
+      const r = this.canvas.getBoundingClientRect();
+      const hit = this.picker.pick(this.camera, r.left + r.width / 2, r.top + r.height / 2);
+      if (hit) f = { x: hit.x, z: hit.z };
+    }
+    const near = this.streamer.buildingsNear(f.x, f.z, COLLAPSE_RADIUS);
+    this.collapse.start(f.x, f.z, planShards(near, f.x, f.z, QUALITY[this.quality].shards, Math.floor(this.time * 1000)));
+    this.audio.shatter();
+    this.flash = Math.max(this.flash, 0.3);
   }
 
   // ---------------------------------------------------------------- modes
@@ -373,6 +395,7 @@ export class App implements DreamContext {
     $('share').addEventListener('click', () => this.share());
     $('reseed').addEventListener('click', () => {
       this.seed = Math.floor(Math.random() * 1e6);
+      this.collapse.stop();
       this.folds.clear(4);
       this.streamer.resetAll(this.seed);
       this.toast('A new city', `Seed ${this.seed}`);
@@ -572,10 +595,14 @@ export class App implements DreamContext {
   private frame(): void {
     this.timer.update();
     const dt = Math.min(this.timer.getDelta(), 0.05);
-    this.time += dt;
+    // While the dream collapses it runs in slow motion (wdt); the dreamer and the cameras keep real time.
+    if (this.collapse.update(dt)) this.kick('Stability hit zero');
+    const slow = this.collapse.timeScale;
+    const wdt = dt * slow;
+    this.time += wdt;
     U.uTime.value = this.time;
 
-    this.folds.update(dt);
+    this.folds.update(wdt);
     U.uFoldCount.value = this.folds.count;
     if (this.folds.version !== this.foldsVersion) {
       this.foldsVersion = this.folds.version;
@@ -599,7 +626,7 @@ export class App implements DreamContext {
       this.walk.update(dt);
       if (this.walk.locked) $('pause').hidden = true;
       if (this.instability > 0.6) {
-        const s = (this.instability - 0.6) * 0.12;
+        const s = (this.instability - 0.6) * 0.12 * slow;
         this.camera.position.add(new THREE.Vector3((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s));
       }
     }
@@ -616,19 +643,23 @@ export class App implements DreamContext {
 
     // Dream stability.
     const floor = Math.min(0.45, this.folds.load * 0.09) + level.limbo * 0.12;
-    this.instability = Math.max(floor, this.instability - dt * 0.03);
-    this.instability = Math.min(1, this.instability + this.folds.strain * dt * 0.07);
+    this.instability = Math.max(floor, this.instability - wdt * 0.03);
+    this.instability = Math.min(1, this.instability + this.folds.strain * wdt * 0.07);
+    if (this.started && this.instability >= COLLAPSE_AT && !this.collapse.active) this.blowUp();
+    // the dream stays at zero until the kick
+    if (this.collapse.blasting) this.instability = 1;
 
     // inside the hallway the dreamer is out of the projections' reach
     const dreamer = this.mode === 'walk' && !this.hallway.rider ? focus : null;
-    this.crowd.update(dt, focus.x, focus.z, dreamer, this.instability, (x, z, r) => this.streamer.collide(x, z, r));
+    this.crowd.update(wdt, focus.x, focus.z, dreamer, this.instability, (x, z, r) => this.streamer.collide(x, z, r));
 
     const fw = new THREE.Vector3();
     if (this.mode === 'walk') fw.copy(this.camera.position);
     else fw.copy(this.architect.controls.target);
     this.env.update(dt, this.camera, fw, q.extent);
     const turning = this.hallway.rider ? Math.abs(this.hallway.spin) * 0.45 : 0;
-    this.audio.update(this.folds.motion + turning, level.drone, this.instability);
+    // slow motion drags the drone down with it
+    this.audio.update(this.folds.motion + turning, level.drone * (0.6 + 0.4 * slow), this.instability);
 
     // Finishing.
     this.flash *= Math.exp(-dt * 2.5);
@@ -637,14 +668,14 @@ export class App implements DreamContext {
     g.uAberration.value = Math.min(0.22, this.instability * 0.05 + this.folds.motion * 0.04);
     g.uFlash.value = this.flash;
     g.uTint.value.lerp(new THREE.Vector3(...level.tint), dt * 2);
-    g.uSaturation.value += (level.saturation - g.uSaturation.value) * dt * 2;
+    g.uSaturation.value += (level.saturation * (0.7 + 0.3 * slow) - g.uSaturation.value) * dt * 2;
     g.uContrast.value += (level.contrast - g.uContrast.value) * dt * 2;
     // At night hundreds of lit windows would wash the frame out, so only the brightest ones bloom.
     this.post.bloom.strength = 0.32 - this.env.night * 0.08;
     this.post.bloom.threshold = 0.9 + this.env.night * 0.5;
 
     this.realElapsed += dt;
-    this.dreamElapsed += dt * level.dilation;
+    this.dreamElapsed += wdt * level.dilation;
     this.updateHud(dt);
     this.renderer.info.reset();
     this.post.render(dt);

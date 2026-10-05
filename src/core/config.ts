@@ -31,6 +31,9 @@ export const SLAB = {
 export const GROUND_FINE_SEGMENTS = 40;
 export const GROUND_COARSE_SEGMENTS = 2;
 
+/** How far from the dreamer the facades blow out when stability hits zero (the café explosion). */
+export const COLLAPSE_RADIUS = 140;
+
 /** Lamp spacing along every street (lamps sit at 16 and 48 metres into each block). */
 export const LAMP_SPACING = 32;
 export const LAMP_OFFSET = 16;

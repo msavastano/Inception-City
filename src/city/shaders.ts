@@ -1,4 +1,4 @@
-import { BLOCK, BOULEVARD_HALF, CHUNK, CHUNK_BLOCKS, LAMP_OFFSET, LAMP_SPACING, MAX_FOLDS, SIDEWALK, STREET_HALF } from '../core/config';
+import { BLOCK, BOULEVARD_HALF, CHUNK, CHUNK_BLOCKS, COLLAPSE_RADIUS, LAMP_OFFSET, LAMP_SPACING, MAX_FOLDS, SIDEWALK, STREET_HALF } from '../core/config';
 
 const f = (n: number) => n.toFixed(4);
 
@@ -161,6 +161,7 @@ varying vec3 vViewF;
 uniform float uNight;
 uniform float uSnow;
 uniform float uTime;
+uniform vec4 uBlast;   // the café explosion: centre x, z (fabric), wave front radius, strength (0 while the dream holds)
 float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 
 // The room behind the window this pixel belongs to, filled in by facade().
@@ -500,6 +501,43 @@ vec3 roomInterior(vec3 rd, out float lamp, out float day) {
   return alb;
 }
 
+// A wall cracked into cells (Voronoi). x: distance to the nearest crack, yz: the cell's id.
+vec3 wallCell(vec2 p) {
+  vec2 i = floor(p);
+  vec2 fp = fract(p);
+  float d1 = 8.0;
+  float d2 = 8.0;
+  vec2 id = i;
+  for (int y = -1; y <= 1; y++) {
+    for (int x = -1; x <= 1; x++) {
+      vec2 g = vec2(float(x), float(y));
+      vec2 r = g + 0.1 + 0.8 * vec2(hash12(i + g), hash12(i + g + 17.31)) - fp;
+      float d = dot(r, r);
+      if (d < d1) { d2 = d1; d1 = d; id = i + g; }
+      else if (d < d2) d2 = d;
+    }
+  }
+  return vec3(sqrt(d2) - sqrt(d1), id);
+}
+
+// The café explosion. Where its wave has passed, the wall cracks into cells and
+// some of them are blown out. Returns (hole, crack, distance to the hole's edge, passed).
+// The chance and the delay match planShards() in src/world/collapse.ts.
+vec4 blastWall() {
+  if (uBlast.w <= 0.0 || vInfo.x > 8.5 || abs(vObjN.y) > 0.5) return vec4(0.0);
+  float dist = length(vFabric.xz - uBlast.xy);
+  if (dist > ${f(COLLAPSE_RADIUS)}) return vec4(0.0);
+  float u = (abs(vObjN.x) > 0.5 ? vLocal.z : vLocal.x) + vInfo.y * 131.0;
+  vec3 c = wallCell(vec2(u / 2.2, vLocal.y / 1.8));
+  float h = hash12(c.yz + vInfo.y * 7.0);
+  float passed = uBlast.z - dist - h * 10.0;
+  if (passed <= 0.0) return vec4(0.0);
+  float crack = (1.0 - smoothstep(0.0, 0.025, c.x)) * smoothstep(0.0, 4.0, passed) * uBlast.w;
+  float chance = 0.45 * (1.0 - smoothstep(${f(COLLAPSE_RADIUS * 0.4)}, ${f(COLLAPSE_RADIUS)}, dist)) * uBlast.w;
+  if (h >= chance) return vec4(0.0, crack, 0.0, uBlast.w);
+  return vec4(1.0, 0.0, c.x, uBlast.w);
+}
+
 // Curtains, sheers and blinds hang in the window itself. Returns colour and coverage.
 vec4 drapes(vec2 p, float s) {
   vec4 res = vec4(0.0);
@@ -533,9 +571,15 @@ export const BUILDING_FRAG_COLOR = /* glsl */ `
 #include <color_fragment>
 float winMask; float winLit; float glassy; vec3 litCol;
 facade(diffuseColor.rgb, winMask, winLit, glassy, litCol);
+// The café explosion: a blown-out cell opens onto the room behind it like a window with no glass.
+vec4 blast = blastWall();
+float hole = blast.x;
+// the torn edge shows the thickness of the wall, and the room is sooty near it
+float rim = hole * (1.0 - smoothstep(0.02, 0.06, blast.z));
+float soot = mix(1.0, (1.0 - rim) * (0.3 + 0.7 * smoothstep(0.06, 0.35, blast.z)), hole);
 // Far away a lit window is a flat warm pane; up close it opens onto a room.
-vec3 winGlow = litCol * winLit * 1.4 * uNight;
-if (winMask > 0.01 && gLod < 0.98) {
+vec3 winGlow = litCol * winLit * 1.4 * uNight * (1.0 - hole);
+if ((winMask > 0.01 || hole > 0.5) && gLod < 0.98) {
   vec3 an = abs(vObjN);
   vec3 rd = vec3(an.x > 0.5 ? vViewF.z : vViewF.x, vViewF.y, -dot(vViewF, vObjN));
   float lamp; float day;
@@ -546,12 +590,22 @@ if (winMask > 0.01 && gLod < 0.98) {
   if (fract(s * 31.3) < 0.1 && gRoomKind < 0.5) light = vec3(0.45, 0.6, 1.0) * (0.55 + 0.45 * sin(uTime * 9.0 + sin(uTime * 2.3) * 4.0));
   vec3 nightCol = room * (lamp * light * gRoomOn * 1.1 + 0.012);
   vec3 dayCol = room * day * 0.09;
-  vec4 dr = drapes(clamp(gPane, 0.0, 1.0), s);
-  // backlit curtains glow; seen from outside by day they are just cloth
-  nightCol = mix(nightCol, dr.rgb * (light * gRoomOn * (dr.a < 0.5 ? 0.5 : 0.3) + 0.01), dr.a);
-  dayCol = mix(dayCol, dr.rgb * 0.08, dr.a);
-  vec3 near = (nightCol * uNight + dayCol * (1.0 - uNight)) * winMask;
+  if (hole < 0.5) {
+    vec4 dr = drapes(clamp(gPane, 0.0, 1.0), s);
+    // backlit curtains glow; seen from outside by day they are just cloth
+    nightCol = mix(nightCol, dr.rgb * (light * gRoomOn * (dr.a < 0.5 ? 0.5 : 0.3) + 0.01), dr.a);
+    dayCol = mix(dayCol, dr.rgb * 0.08, dr.a);
+  }
+  vec3 near = (nightCol * uNight + dayCol * (1.0 - uNight)) * max(winMask, hole) * soot;
   winGlow = mix(near, winGlow, gLod);
+}
+if (hole > 0.5) {
+  diffuseColor.rgb = mix(vec3(0.03, 0.027, 0.025), vColor.rgb * 0.3, rim);
+  winMask = 0.0;
+} else {
+  diffuseColor.rgb *= 1.0 - blast.y * 0.6 * (1.0 - gLod);
+  // the wave blows the glass out of the windows it passes
+  winMask *= 1.0 - blast.w;
 }
 `;
 
@@ -1027,6 +1081,77 @@ metalnessFactor = propMetal;
 export const PROP_FRAG_EMISSIVE = /* glsl */ `
 #include <emissivemap_fragment>
 totalEmissiveRadiance += propGlow;
+`;
+
+// ---------------------------------------------------------------------------
+// Shards: pieces of wall blown out by the café explosion (src/world/collapse.ts)
+// ---------------------------------------------------------------------------
+
+export const SHARD_VERT_HEAD = /* glsl */ `
+attribute vec4 aOrigin;  // fabric x, y, z where it left the wall, break time (shard clock)
+attribute vec4 aVel;     // velocity (fabric m/s), spin (rad/s)
+attribute vec4 aSpin;    // spin axis, yaw of the wall it came from
+attribute vec4 aShape;   // width, height, thickness, glass (0 or 1)
+attribute vec4 aTint;    // rgb, building seed
+attribute float aSink;   // the building's height: in Limbo the shard sinks with it
+uniform vec4 uShatter;   // shard clock (s), size (1 whole, 0 gone), gravity (m/s²), unused
+varying vec3 vTint;
+varying float vGlass;
+varying float vEdge;
+${FOLD_GLSL}
+
+vec3 shardYaw(vec3 v, float a) { float c = cos(a), s = sin(a); return vec3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z); }
+vec3 shardRot(vec3 v, vec3 k, float a) { float c = cos(a), s = sin(a); return v * c + cross(k, v) * s + k * dot(k, v) * (1.0 - c); }
+
+void shardVertex(out vec3 P, out vec3 N) {
+  float age = uShatter.x - aOrigin.w;
+  if (age <= 0.0 || uShatter.y <= 0.0 || aShape.x <= 0.0) {
+    // still part of the wall (or an unused slot)
+    P = vec3(0.0); N = vec3(0.0, 1.0, 0.0); vTint = P; vGlass = 0.0; vEdge = 0.0;
+    return;
+  }
+  // It flies on a parabola and stops where it lands on the street.
+  float g = max(uShatter.z, 1e-3);
+  float rest = 0.3 * aShape.z;
+  float land = (aVel.y + sqrt(aVel.y * aVel.y + 2.0 * g * max(aOrigin.y - rest, 0.0))) / g;
+  float t = min(age, land);
+  vec3 c = aOrigin.xyz + aVel.xyz * t;
+  c.y = max(c.y - 0.5 * g * t * t, rest);
+  // flat against its wall at first (the slab's faces look along +z), then tumbling
+  vec3 local = shardYaw(position * aShape.xyz * uShatter.y, aSpin.w);
+  vec3 nrm = shardYaw(normal, aSpin.w);
+  float a = aVel.w * t;
+  local = shardRot(local, aSpin.xyz, a);
+  nrm = shardRot(nrm, aSpin.xyz, a);
+  float decay = limboDecay(aOrigin.xz, aTint.w);
+  c.y -= decay * (aSink * 0.45 + 6.0);
+  vTint = aTint.rgb;
+  vGlass = aShape.w;
+  vEdge = step(abs(normal.z), 0.5);
+  P = c + local;
+  N = nrm;
+  applyFolds(c.xz, P, N);
+}
+`;
+
+export const SHARD_FRAG_HEAD = /* glsl */ `
+varying vec3 vTint;
+varying float vGlass;
+varying float vEdge;
+`;
+
+export const SHARD_FRAG_COLOR = /* glsl */ `
+#include <color_fragment>
+// broken edges show the paler stone inside; glass is dark and glossy
+diffuseColor.rgb = mix(vTint * (1.0 + 0.18 * vEdge), vec3(0.05, 0.07, 0.08), vGlass);
+`;
+export const SHARD_FRAG_ROUGH = /* glsl */ `
+#include <roughnessmap_fragment>
+roughnessFactor = mix(0.92, 0.06, vGlass);
+`;
+export const SHARD_FRAG_METAL = /* glsl */ `
+#include <metalnessmap_fragment>
+metalnessFactor = mix(0.0, 0.7, vGlass);
 `;
 
 // ---------------------------------------------------------------------------

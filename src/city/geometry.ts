@@ -63,6 +63,26 @@ export function personGeometry(): THREE.BufferGeometry {
   return merge([legs, body, shoulders, head]);
 }
 
+/**
+ * A piece of blown-out wall: an irregular slab about a metre across, centred on
+ * the origin, its faces looking along ±z (the wall's normal). Scaled per shard.
+ */
+export function shardGeometry(): THREE.BufferGeometry {
+  const outline = new THREE.Shape([
+    new THREE.Vector2(-0.5, -0.38),
+    new THREE.Vector2(0.44, -0.5),
+    new THREE.Vector2(0.5, 0.12),
+    new THREE.Vector2(0.18, 0.5),
+    new THREE.Vector2(-0.42, 0.34),
+  ]);
+  const g = new THREE.ExtrudeGeometry(outline, { depth: 1, bevelEnabled: false, curveSegments: 1 });
+  g.translate(0, 0, -0.5);
+  const flat = g.index ? g.toNonIndexed() : g;
+  flat.deleteAttribute('uv');
+  flat.computeVertexNormals();
+  return flat;
+}
+
 /** The city's monument: a giant spinning top balanced on its point. */
 export function totemGeometry(): THREE.BufferGeometry {
   const profile = [

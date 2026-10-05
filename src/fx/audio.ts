@@ -197,6 +197,63 @@ export class DreamAudio {
     this.braam(0.8);
   }
 
+  /** The café explosion: a deep blast, then stone and glass breaking in slow motion, thinning out. */
+  shatter(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(70, t);
+    o.frequency.exponentialRampToValueAtTime(22, t + 2.5);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.85, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 3);
+    o.connect(g).connect(this.master);
+    o.start(t);
+    o.stop(t + 3.1);
+
+    const burst = ctx.createBufferSource();
+    burst.buffer = this.noise;
+    const bf = ctx.createBiquadFilter();
+    bf.type = 'lowpass';
+    bf.frequency.setValueAtTime(1100, t);
+    bf.frequency.exponentialRampToValueAtTime(110, t + 2.5);
+    const bg = ctx.createGain();
+    bg.gain.setValueAtTime(0.0001, t);
+    bg.gain.exponentialRampToValueAtTime(0.5, t + 0.03);
+    bg.gain.exponentialRampToValueAtTime(0.0001, t + 3);
+    burst.connect(bf).connect(bg);
+    bg.connect(this.master);
+    bg.connect(this.reverb);
+    burst.start(t);
+    burst.stop(t + 3.1);
+
+    // debris: grains of noise played slowly, so they sound stretched in time
+    for (let i = 0; i < 70; i++) {
+      const at = t + 0.05 + Math.pow(Math.random(), 1.8) * 3.4;
+      const glass = Math.random() < 0.45;
+      const src = ctx.createBufferSource();
+      src.buffer = this.noise;
+      src.playbackRate.value = 0.25 + Math.random() * 0.35;
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.value = glass ? 2500 + Math.random() * 3500 : 300 + Math.random() * 700;
+      f.Q.value = glass ? 6 : 1.5;
+      const gg = ctx.createGain();
+      const len = glass ? 0.25 : 0.4;
+      gg.gain.setValueAtTime(0.0001, at);
+      gg.gain.exponentialRampToValueAtTime((glass ? 0.12 : 0.18) * (1 - (at - t) / 4), at + 0.01);
+      gg.gain.exponentialRampToValueAtTime(0.0001, at + len);
+      src.connect(f).connect(gg);
+      gg.connect(this.master);
+      gg.connect(this.reverb);
+      src.start(at, Math.random() * 1.5);
+      src.stop(at + len + 0.05);
+    }
+  }
+
   step(): void {
     const ctx = this.ctx;
     if (!ctx) return;

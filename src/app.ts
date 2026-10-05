@@ -224,7 +224,9 @@ export class App implements DreamContext {
   // ---------------------------------------------------------------- modes
 
   setMode(mode: Mode): void {
-    if (mode === this.mode && this.started) return;
+    // `mode` starts out as 'architect' before either mode has been entered, so check the mode is actually live
+    const entered = mode === 'walk' ? this.walk.active : this.architect.active;
+    if (mode === this.mode && entered) return;
     this.mode = mode;
     document.body.classList.toggle('walk', mode === 'walk');
     $('pause').hidden = true;

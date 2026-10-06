@@ -98,6 +98,8 @@ button.primary {
 
 #brand,
 #clock,
+#job,
+#objective,
 #stability,
 #stats,
 #toast {
@@ -342,11 +344,208 @@ select option {
   display: none;
 }
 
+/* Heist mode: the job panel replaces the clock, and the objective sits above the hint */
+#job {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  display: none;
+  text-align: right;
+  font-size: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  pointer-events: none;
+  z-index: 5;
+  min-width: 190px;
+}
+body.heist #job {
+  display: block;
+}
+body.heist #clock {
+  display: none;
+}
+#job .k {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  margin-right: 4px;
+}
+#job .topside b {
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+#job .topside.low b {
+  color: var(--danger);
+}
+#job .rate {
+  color: var(--accent);
+  margin-top: 1px;
+}
+#job .depth {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+#job .depth i {
+  font-style: normal;
+  min-width: 22px;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+}
+#job .depth i.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+#job .depth i.limbo.on {
+  background: #b9b3a6;
+  border-color: #b9b3a6;
+}
+#job .meter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 9px;
+}
+#job .meter .bar {
+  width: 96px;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+#job .meter .bar i {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--cold);
+  transition: background 0.3s;
+}
+#job .carry {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 9px;
+  max-width: 210px;
+  margin-left: auto;
+}
+#job .carry span {
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+}
+#job .carry span[hidden] {
+  display: none;
+}
+#job .carry span.have {
+  border-style: solid;
+  color: var(--text);
+  font-weight: 600;
+}
+#job .carry span.have[data-c='totem'] {
+  border-color: #f1eee7;
+}
+#job .carry span.have[data-c^='k'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+#job .carry span.have[data-c='idea'] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+#objective {
+  position: fixed;
+  left: 50%;
+  bottom: 62px;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  text-align: center;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 7px 14px;
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 5;
+  display: none;
+}
+body.heist #objective:not(:empty) {
+  display: block;
+}
+body.heist #stability {
+  top: 206px;
+}
+/* Until you find your totem you can't tell how stable the dream is */
+body.heist:not(.has-totem) #totem,
+body.heist:not(.has-totem) #stability {
+  visibility: hidden;
+}
+#panel-job {
+  width: 100%;
+  margin-top: 8px;
+}
+body.heist #touch-ui [data-touch='wake'] {
+  display: none;
+}
+.rules {
+  text-align: left;
+  margin: 14px 0 0;
+  padding-left: 18px;
+  color: var(--soft);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.rules li {
+  margin: 6px 0;
+}
+.rules b {
+  color: var(--text);
+}
+#job-brief .card,
+#job-end .card {
+  text-align: center;
+}
+#job-end h2 {
+  font-size: 26px;
+}
+.job-stats {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 4px 16px;
+  justify-content: center;
+  font-size: 14px;
+  margin: 14px 0 20px;
+}
+.job-stats dt {
+  color: var(--muted);
+  text-align: right;
+}
+.job-stats dd {
+  margin: 0;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
 #hint {
   position: fixed;
   left: 50%;
   bottom: 18px;
   transform: translateX(-50%);
+  width: max-content;
   max-width: min(720px, calc(100vw - 32px));
   text-align: center;
   font-size: 13px;
@@ -419,6 +618,7 @@ body.walk [data-only='architect'] {
   text-align: center;
   padding: 14px 26px;
   border-radius: 14px;
+  width: max-content;
   max-width: calc(100vw - 32px);
   opacity: 0;
   pointer-events: none;
@@ -574,6 +774,19 @@ body.walk.touch #touch-ui {
   #stability {
     top: 92px;
   }
+  body.heist #stability {
+    top: 192px;
+  }
+  #job {
+    min-width: 0;
+  }
+  #job .topside b {
+    font-size: 20px;
+  }
+  #objective {
+    bottom: 56px;
+    border-radius: 12px;
+  }
   #brand {
     padding-right: 12px;
   }
@@ -586,7 +799,27 @@ body.walk.touch #touch-ui {
   }
 }
 
+/* phones: the job panel goes under the wordmark, and the objective clears the touch buttons */
+@media (max-width: 520px) {
+  #job {
+    top: 92px;
+    padding: 7px 10px;
+  }
+  body.heist #stability {
+    top: 262px;
+  }
+  /* below the job panel, not over it */
+  body.heist #toast {
+    top: 304px;
+  }
+}
+body.touch #objective {
+  bottom: 228px;
+}
+
 body.intro #brand,
+body.intro #job,
+body.intro #objective,
 body.intro #panel,
 body.intro #panel-toggle,
 body.intro #clock,

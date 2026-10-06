@@ -30,6 +30,7 @@
           <button data-mode="architect" class="on">Architect</button>
           <button data-mode="walk">Dream Walk</button>
         </div>
+        <button id="panel-job" title="Heist mode">Take the job</button>
       </section>
 
       <section data-only="architect">
@@ -90,6 +91,21 @@
       <div class="dilation" id="dilation">×20</div>
     </div>
 
+    <div id="job" aria-label="The job">
+      <div class="topside"><span class="k">Topside</span> <b id="job-topside">08:00</b></div>
+      <div class="rate" id="job-rate"></div>
+      <div class="depth" id="job-depth" aria-label="Dream depth"><i>1</i><i>2</i><i>3</i><i class="limbo">Limbo</i></div>
+      <div class="meter">
+        <span class="k" id="job-meter-k">Health</span>
+        <div class="bar"><i id="job-meter"></i></div>
+      </div>
+      <div class="carry" id="job-carry" aria-label="What you carry">
+        <span data-c="totem">Totem</span><span data-c="k0">Kick 1</span><span data-c="k1">Kick 2</span><span data-c="k2">Kick 3</span
+        ><span data-c="k3">Limbo kick</span><span data-c="idea">Idea</span>
+      </div>
+    </div>
+    <div id="objective" role="status"></div>
+
     <div id="stability" title="Dream stability">
       <span class="k">Stability</span>
       <div class="bar"><i id="stability-bar"></i></div>
@@ -121,6 +137,40 @@
       </div>
     </div>
 
+    <div id="job-brief" class="overlay" hidden>
+      <div class="card">
+        <p class="kicker">The job</p>
+        <h2>Plant an idea three dreams down</h2>
+        <ul class="rules">
+          <li>Find your <b>totem</b> and a <b>sleep machine</b> on Level 1. Walk into the machine to go deeper.</li>
+          <li>The <b>target</b> waits on Level 3, guarded. Stay beside them for 3 seconds to plant the idea.</li>
+          <li><b>Kicks</b> take you back up a level, but only on the level where you found them. Listen for the music.</li>
+          <li>The <b>topside clock</b> runs slower the deeper you are. Healing takes time, so heal deep.</li>
+          <li>Die in a dream and you wash up in <b>Limbo</b>. Find its kick before you forget you are dreaming.</li>
+        </ul>
+        <p class="keys">Follow the beams of light · WASD walk · Shift run · K kick · F fold ahead · E ride the fold</p>
+        <div class="cta">
+          <button id="job-go" class="primary">Go under</button>
+          <button id="job-back">Not now</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="job-end" class="overlay" hidden>
+      <div class="card">
+        <p class="kicker" id="job-end-kicker"></p>
+        <h2 id="job-end-title"></h2>
+        <p id="job-end-sub"></p>
+        <dl class="job-stats" id="job-stats"></dl>
+        <div class="cta">
+          <button id="job-again" class="primary">Run it again</button>
+          <button id="job-new">New job</button>
+          <button id="job-share">Share this job</button>
+          <button id="job-leave">Back to the city</button>
+        </div>
+      </div>
+    </div>
+
     <div id="intro" class="overlay">
       <div class="card intro">
         <p class="kicker">A city you can fold</p>
@@ -132,8 +182,10 @@
         <div class="cta">
           <button id="go-architect" class="primary">Enter as the Architect</button>
           <button id="go-walk">Walk the dream</button>
+          <button id="go-job">Take the job</button>
         </div>
         <p class="keys">Drag to fold · Tab walk inside · F fold the street ahead · E ride it · H the hallway · K the kick</p>
+        <p class="keys">Take the job: plant an idea three dreams down and get out before the plane lands.</p>
         <p class="fine">Best with sound. Runs in any WebGL2 browser.</p>
       </div>
     </div>

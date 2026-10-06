@@ -45,6 +45,8 @@ export class DreamWalk {
   private jumpQueued = false;
   onPause: (() => void) | null = null;
   fov = 74;
+  /** Off while the dreamer is limping (Heist mode). */
+  canSprint = true;
 
   constructor(private ctx: DreamContext) {
     window.addEventListener('keydown', (e) => {
@@ -158,6 +160,35 @@ export class DreamWalk {
     this.transition = { p0: this.ctx.camera.position.clone(), q0: this.ctx.camera.quaternion.clone(), t: 0, dur: 1.8 };
     this.ctx.hint(WALK_HINT);
     this.lock();
+  }
+
+  /**
+   * Put an active dreamer straight down somewhere else (a new dream, under cover
+   * of a fade). With swoop, a camera move already under way carries on to the new spot.
+   */
+  teleport(x: number, z: number, yaw: number, swoop = false): void {
+    this.ctx.hallway.release();
+    this.rideFold = null;
+    const c = this.ctx.streamer.collide(x, z, RADIUS);
+    this.x = c.x;
+    this.z = c.z;
+    this.yaw = yaw;
+    this.pitch = 0.08;
+    this.h = 0;
+    this.vh = 0;
+    this.vx = this.vz = 0;
+    if (!swoop) this.transition = null;
+  }
+
+  /** Knocked back from a fabric point (a projection's blow). */
+  shove(fromX: number, fromZ: number): void {
+    if (this.ctx.hallway.rider) return;
+    const dx = this.x - fromX;
+    const dz = this.z - fromZ;
+    const d = Math.hypot(dx, dz) || 1;
+    this.vx = (dx / d) * 11;
+    this.vz = (dz / d) * 11;
+    if (this.h <= 0) this.vh = 3.5;
   }
 
   exit(): void {
@@ -300,7 +331,7 @@ export class DreamWalk {
       f = -this.touchMove.dy;
       s = this.touchMove.dx;
     }
-    const sprint = k.has('ShiftLeft') || k.has('ShiftRight') || (this.touchMove ? Math.hypot(f, s) > 0.95 : false);
+    const sprint = this.canSprint && (k.has('ShiftLeft') || k.has('ShiftRight') || (this.touchMove ? Math.hypot(f, s) > 0.95 : false));
     const speed = sprint ? SPRINT : WALK;
     const jump = k.has('Space') || this.jumpQueued;
     this.jumpQueued = false;

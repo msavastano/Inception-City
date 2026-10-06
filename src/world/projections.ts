@@ -36,6 +36,23 @@ interface Agent {
   hunting: boolean;
 }
 
+/** How a crowd behaves. The defaults are the city's own projections; Heist mode's guards tighten them. */
+export interface CrowdOptions {
+  /** How far around the focus agents appear, in sidewalk-lattice steps (two per block). */
+  spread?: number;
+  /** Agents further than this from the focus are moved back near it. */
+  leash?: number;
+  /** ...appearing at least this far from it, out of sight. */
+  respawnMin?: number;
+  /** Distances over which their attention to the dreamer fades out. */
+  near?: number;
+  far?: number;
+  /** 0: some people are more suspicious than others. 1: everyone is (guards). */
+  zeal?: number;
+  /** Range of coat tones (the prop shader picks one of four coats from it). */
+  tones?: [number, number];
+}
+
 export class Projections {
   readonly mesh: THREE.Mesh;
   private geometry = new THREE.InstancedBufferGeometry();
@@ -46,9 +63,19 @@ export class Projections {
   private rand = rng(1234);
   maxSuspicion = 0;
   watching = 0;
-  onCaught: (() => void) | null = null;
+  /** How many are hunting the dreamer right now. */
+  hunting = 0;
+  /** Someone reached the dreamer (from fabric x, z). They lose track of you for a moment. */
+  onCaught: ((x: number, z: number) => void) | null = null;
+  private opts: Required<CrowdOptions>;
 
-  constructor(material: THREE.Material, depth: THREE.Material, readonly capacity: number) {
+  constructor(
+    material: THREE.Material,
+    depth: THREE.Material,
+    readonly capacity: number,
+    options: CrowdOptions = {},
+  ) {
+    this.opts = { spread: 18, leash: 330, respawnMin: 140, near: 50, far: 230, zeal: 0, tones: [0, 1], ...options };
     const base = personGeometry();
     for (const [name, attr] of Object.entries(base.attributes)) this.geometry.setAttribute(name, attr);
     const mk = (size: number) => {
@@ -83,15 +110,16 @@ export class Projections {
   private spawn(a: Agent, fx: number, fz: number, minDist: number): void {
     const r = this.rand;
     for (let tries = 0; tries < 8; tries++) {
-      a.ix = Math.round((fx / BLOCK) * 2) + Math.floor((r() - 0.5) * 18);
-      a.iz = Math.round((fz / BLOCK) * 2) + Math.floor((r() - 0.5) * 18);
+      a.ix = Math.round((fx / BLOCK) * 2) + Math.floor((r() - 0.5) * this.opts.spread);
+      a.iz = Math.round((fz / BLOCK) * 2) + Math.floor((r() - 0.5) * this.opts.spread);
       a.x = nodeCoord(a.ix);
       a.z = nodeCoord(a.iz);
       if (Math.hypot(a.x - fx, a.z - fz) >= minDist) break;
     }
     a.speed = 1.1 + r() * 0.7;
     a.phase = r() * 6.28;
-    a.tone = r();
+    const [t0, t1] = this.opts.tones;
+    a.tone = t0 + (t1 - t0) * r();
     a.suspicion = 0;
     a.hunting = false;
     const dirs = [
@@ -144,7 +172,10 @@ export class Projections {
     dreamer: { x: number; z: number } | null,
     instability: number,
     collide: (x: number, z: number, r: number) => { x: number; z: number },
+    /** Extra suspicion on top of what instability causes (Heist mode: depth, running, guarding). */
+    alert = 0,
   ): void {
+    const o = this.opts;
     const pos = this.aPos.array as Float32Array;
     const par = this.aParam.array as Float32Array;
     const st = this.aState.array as Float32Array;
@@ -152,15 +183,17 @@ export class Projections {
     const tz = dreamer ? dreamer.z : focusZ;
     let maxS = 0;
     let watching = 0;
+    let hunting = 0;
 
     this.agents.forEach((a, i) => {
-      if (Math.hypot(a.x - focusX, a.z - focusZ) > 330) this.spawn(a, focusX, focusZ, 140);
+      if (Math.hypot(a.x - focusX, a.z - focusZ) > o.leash) this.spawn(a, focusX, focusZ, o.respawnMin);
 
       const toX = tx - a.x;
       const toZ = tz - a.z;
       const dist = Math.hypot(toX, toZ);
-      const prox = 1 - THREE.MathUtils.smoothstep(dist, 50, 230);
-      const target = Math.min(1, instability * 1.25) * prox * (0.6 + 0.4 * a.tone);
+      const prox = 1 - THREE.MathUtils.smoothstep(dist, o.near, o.far);
+      const keen = THREE.MathUtils.lerp(0.6 + 0.4 * a.tone, 1, o.zeal);
+      const target = Math.min(1, instability * 1.25 + alert) * prox * keen;
       a.suspicion += (target - a.suspicion) * Math.min(1, dt * (target > a.suspicion ? 0.9 : 0.25));
       maxS = Math.max(maxS, a.suspicion);
 
@@ -176,8 +209,12 @@ export class Projections {
         a.z = c.z;
         a.yaw = Math.atan2(toX, toZ);
         a.phase += dt * sp * 5.5;
-        if (dist < 1.1) this.onCaught?.();
+        if (dist < 1.1 && this.onCaught) {
+          this.onCaught(a.x, a.z);
+          a.suspicion = 0.3;
+        }
         watching++;
+        hunting++;
       } else if (a.suspicion > 0.42) {
         // stop and stare
         moving = false;
@@ -230,6 +267,7 @@ export class Projections {
     });
     this.maxSuspicion = maxS;
     this.watching = watching;
+    this.hunting = hunting;
     for (const attr of [this.aPos, this.aParam, this.aState]) {
       attr.clearUpdateRanges();
       attr.addUpdateRange(0, this.agents.length * 4);
@@ -240,5 +278,12 @@ export class Projections {
   /** Everyone forgets (after a kick). */
   calm(): void {
     for (const a of this.agents) a.suspicion = 0;
+  }
+
+  /** Everyone forgets and goes somewhere else around a fabric point (a new dream). */
+  scatter(fx: number, fz: number, minDist = 30): void {
+    for (const a of this.agents) this.spawn(a, fx, fz, minDist);
+    this.hunting = 0;
+    this.watching = 0;
   }
 }

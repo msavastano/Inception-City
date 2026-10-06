@@ -119,6 +119,21 @@ The physics is pinned by `tests/hallway.test.ts`: standing still, a minute of tu
 
 **E** turns the fold algebra into a lift. The hinge goes on the first street at least π·48 + 12 m behind you, with the page facing forward and a 48 m radius. That distance matters: everything closer than π·R to the hinge is wrapped around the curl, everything beyond it is the rigid page. So you never ride the bend itself; you stand on a flat street that swings up and over like a turning page, and at 180° you are upside down at exactly 2R = 96 m, looking up at the city below. The fold uses a slower spring than F, the field of view widens while it moves, and gravity following the fabric means you can walk around up there.
 
+### 4.5 Heist mode
+
+A game played in Dream Walk ("Take the job" on the intro): go down three dreams, plant an idea in a target on Level 3, then ride the kicks back up and wake before the topside clock runs out.
+
+- **One clock.** Topside, the waking world, starts at 8:00 and runs at ×1 on Level 1, ×½ on Level 2, ×¼ on Level 3 and not at all in Limbo. A minute of play costs 60, 30 or 15 topside seconds depending on where you spend it. (The film's ×20 per level would freeze the clock below Level 1, so the game uses a gentler ladder.)
+- **Already folded.** Each level is its own city (the job's seed, hashed with the depth; Level 1 uses the seed itself) and arrives folded into a dreamscape: Level 1 the Paris Fold, Level 2 Escher Steps, Level 3 City in a Box, Limbo flat.
+- **Things to find.** Each level's things are placed from the seed on sidewalk corners, inside zones laid out against its dreamscape, so the folds decide where they end up: Level 1's sleep machine is on the flap hanging overhead, Level 2's is up on the first terrace, Level 3's kick is up one of the box's walls. Every one has a beam of light drawn through the fold transform (a machine on the flap shines down out of the sky): blue for a **sleep machine** (a briefcase on a café table; walk into it to go one level deeper), gold for a **kick** (a gramophone; picked up and used with K, only on its own level, and heard from about four blocks away as a music box), white for your **totem** (Level 1 only; you need it to go under to Level 3, and the HUD totem and stability bar stay hidden until you have it) and red for the **target** (Level 3, with seven guards; stay within 3 m of them for 3 seconds). The objective line gives the distance and direction to the next thing you need, except kicks, which you find by ear.
+- **Up the way you came.** Kicking up a level wakes you beside the machine you went under at, so a kick found on the way down saves a search on the way up.
+- **Hurt and healing.** A projection that reaches you takes a quarter of your health (instead of throwing you out) and shoves you back, with two seconds of grace. Below half you limp, the picture edges run red and a heartbeat starts. You heal 1% per second of play while nothing is hunting you, so a full heal costs 100 topside seconds on Level 1 and 25 on Level 3: if you are hurt, heal deep. From Level 2 down the crowd is warier, and running past people raises their suspicion.
+- **The café explosion** still goes off at zero stability. In a job it costs 40% health, and the kick that follows is free: a desperate way up a level without its kick.
+- **Limbo.** If your health runs out you are sedated, so you wash up in Limbo instead of waking. Topside stops, but your lucidity runs down (90 s with your totem, 45 without). Find Limbo's kick to return to the level you fell from, at 35% health, or be lost.
+- **Winning.** Take Level 1's kick (or crash Level 1) with the idea planted. The end card keeps the best topside time per job on your device, and "Share this job" links `#job=<seed>` so someone else can run the same three cities.
+
+The rules live in `src/game/heist.ts` with no rendering in them, so `tests/heist.test.ts` plays whole jobs: placement, the clock ladder, healing cost by depth, hits and grace, Limbo, the free kick after a blast, the totem gate and the win.
+
 ---
 
 ## 5. How it is built
@@ -282,8 +297,11 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 - Rooms behind the windows, traced in the facade shader, with lamps, curtains and furniture
 - Wet streets in the Rain: the city mirrored in puddles and smeared across wet asphalt, rippled by raindrops
 
-### Milestone 1.3: the café explosion (this release)
+### Milestone 1.3: the café explosion (done)
 - When stability hits zero the facades crack and blow out in slow motion, then the kick arrives on its own
+
+### Milestone 1.4: Heist mode (this release)
+- A game in the folded city: sleep machines down, found kicks up, a target to plant an idea in, a totem, and a topside clock that slows with depth (4.5)
 
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
@@ -317,6 +335,8 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/world/hallway.ts` | The rotating hallway: geometry, shader painter and the rider's physics |
 | `src/world/collapse.ts` | The café explosion: the shard planner, the slow-motion timeline and the automatic kick |
 | `src/modes/` | Architect controls, Dream Walk controls, presets, the ride fold (`ride.ts`) |
+| `src/game/heist.ts` | Heist mode's rules: the topside clock, health, Limbo, placement and the kicks |
+| `src/game/marks.ts` | Heist mode's things in the city: sleep machine, gramophone, totem, target and their beams |
 | `src/fx/` | GPU picking, procedural audio, post-processing, the wet-street mirror (`reflection.ts`) |
 | `src/ui/` | Styles and the HUD totem |
-| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror and café explosion tests |
+| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror, café explosion and Heist mode tests |

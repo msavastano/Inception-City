@@ -998,7 +998,7 @@ export const PROP_VERT_HEAD = /* glsl */ `
 attribute vec4 iPosYaw;  // x, y, z, yaw
 attribute vec4 iParam;   // scale, tone, birth time or walk phase, spin speed
 attribute vec4 iState;   // suspicion, kind (0 tree, 1 lamp, 2 person, 3 totem), unused, unused
-attribute float aPart;   // 0 solid, 1 foliage, 2 lamp glass, 3 body, 4 head, 5 metal
+attribute float aPart;   // 0 solid, 1 foliage, 2 lamp glass, 3 body, 4 head, 5 metal, 6 glowing
 attribute vec3 aColor;
 varying vec3 vColorV;
 varying float vPart;
@@ -1092,9 +1092,13 @@ if (vPart > 0.5 && vPart < 1.5) {
   float s = vTone.y;
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.35, 0.03, 0.03), smoothstep(0.35, 1.0, s));
   propGlow = vec3(0.9, 0.08, 0.05) * smoothstep(0.7, 1.0, s) * (vPart > 3.5 ? 1.2 : 0.15);
-} else if (vPart > 4.5) {
+} else if (vPart > 4.5 && vPart < 5.5) {
   propMetal = 0.9;
   propRough = 0.28;
+} else if (vPart > 5.5) {
+  // Heist mode's sleep machine lights and gramophone horn: lit by their own colour
+  diffuseColor.rgb = vColorV * 0.3;
+  propGlow = vColorV * 2.2;
 }
 `;
 export const PROP_FRAG_ROUGH = /* glsl */ `

@@ -598,6 +598,9 @@ body.heist #touch-ui [data-touch='wake'] {
 body.walk #crosshair {
   display: block;
 }
+body.walk.third #crosshair {
+  display: none;
+}
 body.walk #panel,
 body.walk #panel-toggle {
   display: none;

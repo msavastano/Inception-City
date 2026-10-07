@@ -44,7 +44,7 @@ const ALERT_AT_DEPTH = [0, 0.1, 0.2, 0.15];
 /** Running past projections on Level 2 and below makes them suspicious. */
 const RUN_ALERT = 0.35;
 const RATE_LABEL = ['Topside runs at full speed', 'Topside runs at half speed', 'Topside runs at a quarter speed', 'Topside is stopped in Limbo'];
-const HEIST_HINT = 'Follow the light · WASD walk · Shift run · K kick (once you have found one) · F fold ahead · E ride the fold · Esc pause';
+const HEIST_HINT = 'Follow the light · WASD walk · Shift run · K kick (once you have found one) · F fold ahead · E ride the fold · C camera · Esc pause';
 const HEIST_TOUCH_HINT = 'Follow the light. Left thumb walks, right thumb looks. Kick once you have found one.';
 /** Seconds to fade out (and back in) when the job moves between dreams. */
 const FADE = 0.6;
@@ -191,6 +191,8 @@ export class App implements DreamContext {
     this.post = new PostFX(this.renderer, this.scene, this.camera, mobile || this.quality === 'low' ? 0 : 4);
     this.architect = new ArchitectMode(this);
     this.walk = new DreamWalk(this);
+    this.scene.add(this.walk.body.group);
+    document.body.classList.toggle('third', this.walk.view === 'third');
     this.walk.onPause = () => {
       if (this.mode === 'walk' && !this.run?.outcome) $('pause').hidden = false;
     };
@@ -851,6 +853,7 @@ export class App implements DreamContext {
         if (a === 'ride') this.walk.ride();
         if (a === 'hall') this.walk.toggleHallway();
         if (a === 'kick') this.pressKick();
+        if (a === 'view') this.toggleView();
         if (a === 'wake') this.setMode('architect');
       });
     }
@@ -898,6 +901,9 @@ export class App implements DreamContext {
         case 'KeyE':
           if (this.mode === 'walk') this.walk.ride();
           break;
+        case 'KeyC':
+          if (this.mode === 'walk') this.toggleView();
+          break;
         case 'KeyH':
           if (this.mode === 'walk') this.walk.toggleHallway();
           else if (this.hallway.open) this.hallway.dismiss();
@@ -905,6 +911,14 @@ export class App implements DreamContext {
           break;
       }
     });
+  }
+
+  /** C (or the touch View button): first person, or the camera behind the dreamer. */
+  private toggleView(): void {
+    const third = this.walk.toggleView() === 'third';
+    document.body.classList.toggle('third', third);
+    const how = document.body.classList.contains('touch') ? 'Tap View' : 'Press C';
+    this.toast(third ? 'Behind the dreamer' : 'First person', `${how} to switch back.`);
   }
 
   private undo(): void {

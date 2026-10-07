@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { BLOCK, streetHalfWidth } from '../core/config';
 import { Fold, foldPoint } from '../core/fold';
+import { DreamerBody } from '../world/dreamer';
 import { HALL_LENGTH, Hallway } from '../world/hallway';
+import { CHASE, boomFollow, clearance } from './chase';
 import { DreamContext } from './context';
 import { rideSpec } from './ride';
 
@@ -9,13 +11,37 @@ const EYE = 1.65;
 const RADIUS = 0.35;
 const WALK = 5.5;
 const SPRINT = 13;
-const WALK_HINT = 'WASD walk · Shift run · Space jump · F fold ahead · V drop it · E ride the fold · H the hallway · K kick · Esc pause';
+const WALK_HINT = 'WASD walk · Shift run · Space jump · F fold ahead · V drop it · E ride the fold · H the hallway · C camera · K kick · Esc pause';
+const VIEW_KEY = 'inception-view';
+
+/** First person, or the third-person camera behind the dreamer's shoulder. */
+export type View = 'first' | 'third';
+
+function savedView(): View {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'third' ? 'third' : 'first';
+  } catch {
+    // no storage (private window): first person, as always
+    return 'first';
+  }
+}
+
+/** Turn an angle towards another the short way round. */
+function turnTowards(a: number, b: number, k: number): number {
+  const d = Math.atan2(Math.sin(b - a), Math.cos(b - a));
+  return a + d * Math.min(1, k);
+}
 
 /**
- * First person. The walker lives entirely in flat fabric space: movement,
+ * Dream Walk. The walker lives entirely in flat fabric space: movement,
  * collision and gravity never see a fold. Only the camera is pushed through
  * the fold transform, which is why you can stroll up a curling boulevard and
  * end up walking on the ceiling of the world.
+ *
+ * The third-person view (C) works the same way: the camera's boom is laid out
+ * and collided in fabric space, beside the walker, and only then folded, so it
+ * keeps out of buildings and stays on the street's side of a curl however the
+ * city is bent. The body is placed through the folds at the walker's feet.
  */
 export class DreamWalk {
   active = false;
@@ -47,6 +73,18 @@ export class DreamWalk {
   fov = 74;
   /** Off while the dreamer is limping (Heist mode). */
   canSprint = true;
+  view: View = savedView();
+  readonly body = new DreamerBody();
+  /** Fabric heading the body faces (it turns to where you walk; the camera looks where you look). */
+  private bodyYaw = 0;
+  /** How much of the camera's shoulder offset and boom are in use (0 to 1), after walls pulled them in. */
+  private sideT = 1;
+  private backT = 1;
+  /** Switching back to first person: the body stays until the camera has flown into its head. */
+  private leavingBody = false;
+  private feetW = new THREE.Vector3();
+  private headW = new THREE.Vector3();
+  private upW = new THREE.Vector3();
 
   constructor(private ctx: DreamContext) {
     window.addEventListener('keydown', (e) => {
@@ -63,7 +101,7 @@ export class DreamWalk {
     });
     document.addEventListener('pointerlockerror', () => {
       this.dragLook = true;
-      this.ctx.hint('Drag to look around. WASD to walk, Shift to run, Space to jump. F folds the street ahead, E rides it, H the hallway, K the kick.');
+      this.ctx.hint('Drag to look around. WASD to walk, Shift to run, Space to jump. F folds the street ahead, E rides it, H the hallway, C the camera, K the kick.');
     });
     document.addEventListener('mousemove', (e) => {
       if (this.active && this.locked) this.look(e.movementX, e.movementY);
@@ -156,6 +194,7 @@ export class DreamWalk {
     this.vh = 0;
     this.vx = this.vz = 0;
     this.pitch = 0.08;
+    this.bodyYaw = this.yaw;
     this.active = true;
     this.transition = { p0: this.ctx.camera.position.clone(), q0: this.ctx.camera.quaternion.clone(), t: 0, dur: 1.8 };
     this.ctx.hint(WALK_HINT);
@@ -173,6 +212,7 @@ export class DreamWalk {
     this.x = c.x;
     this.z = c.z;
     this.yaw = yaw;
+    this.bodyYaw = yaw;
     this.pitch = 0.08;
     this.h = 0;
     this.vh = 0;
@@ -194,8 +234,23 @@ export class DreamWalk {
   exit(): void {
     this.leaveHallway();
     this.active = false;
+    this.body.visible = false;
     this.keys.clear();
     if (document.pointerLockElement) document.exitPointerLock();
+  }
+
+  /** Switch between first person and the camera behind the dreamer (remembered for next time). */
+  toggleView(): View {
+    this.view = this.view === 'first' ? 'third' : 'first';
+    try {
+      localStorage.setItem(VIEW_KEY, this.view);
+    } catch {
+      // no storage: the choice lasts until the page closes
+    }
+    this.sideT = this.backT = 1;
+    if (!this.transition) this.startTransition(0.45);
+    this.leavingBody = this.view === 'first' && !!this.transition;
+    return this.view;
   }
 
   /** Fold the street ahead of the dreamer (up and over with up = true, down into a cliff otherwise). */
@@ -305,16 +360,17 @@ export class DreamWalk {
   }
 
   /** Where the dreamer's eyes are and how they're oriented, after folding. */
-  private pose(outPos: THREE.Vector3, outQ: THREE.Quaternion): void {
+  private pose(outPos: THREE.Vector3, outQ: THREE.Quaternion, pitch: number): void {
     const [bx, by, bz] = this.basis;
     bx.set(1, 0, 0);
     by.set(0, 1, 0);
     bz.set(0, 0, 1);
-    outPos.set(this.x, this.h + EYE + this.bob, this.z);
-    foldPoint(this.ctx.folds.active, this.x, this.z, outPos, this.basis);
+    this.feetW.set(this.x, this.h, this.z);
+    foldPoint(this.ctx.folds.active, this.x, this.z, this.feetW, this.basis);
+    outPos.copy(this.feetW).addScaledVector(by, EYE + this.bob);
     // camera looks down its -Z; build its frame in local fabric terms, then map through the fold basis
-    const cp = Math.cos(this.pitch);
-    const fl = new THREE.Vector3(Math.sin(this.yaw) * cp, Math.sin(this.pitch), Math.cos(this.yaw) * cp);
+    const cp = Math.cos(pitch);
+    const fl = new THREE.Vector3(Math.sin(this.yaw) * cp, Math.sin(pitch), Math.cos(this.yaw) * cp);
     const fw = new THREE.Vector3().addScaledVector(bx, fl.x).addScaledVector(by, fl.y).addScaledVector(bz, fl.z).normalize();
     const right = new THREE.Vector3().crossVectors(fw, by).normalize();
     const up = new THREE.Vector3().crossVectors(right, fw).normalize();
@@ -397,6 +453,12 @@ export class DreamWalk {
       }
     }
 
+    // the body turns to face the way you walk
+    if (Math.hypot(f, s) > 0.1) {
+      const want = Math.atan2(Math.sin(this.yaw) * f - Math.cos(this.yaw) * s, Math.cos(this.yaw) * f + Math.sin(this.yaw) * s);
+      this.bodyYaw = turnTowards(this.bodyYaw, want, dt * 10);
+    }
+
     if (grounded && moving > 0.5) {
       const before = Math.floor(this.stepPhase / Math.PI);
       this.stepPhase += dt * moving * 1.35;
@@ -408,23 +470,134 @@ export class DreamWalk {
     this.fov += ((sprint && moving > 7 ? 84 : 74) + carried * 12 - this.fov) * Math.min(1, dt * 4);
 
     const cam = this.ctx.camera;
-    if (hall.rider) hall.pose(this.yaw - hall.axisYaw, this.pitch, this.eye, this.targetQ, this.bob);
-    else this.pose(this.eye, this.targetQ);
+    const third = this.view === 'third';
+    // from behind, the view tips down a little so the whole body is in the picture
+    const pitch = third ? Math.max(-1.5, this.pitch - CHASE.tilt) : this.pitch;
+    if (hall.rider) hall.pose(this.yaw - hall.axisYaw, pitch, this.eye, this.targetQ, this.bob);
+    else this.pose(this.eye, this.targetQ, pitch);
+    // the camera keeps the view's orientation and moves back over the shoulder
+    if (third && hall.rider) this.chaseInHallway(dt, pitch);
+    else if (third) this.chaseOnStreet(dt, pitch);
+    const showBody = third || (this.leavingBody && !!this.transition);
+    if (showBody) {
+      this.placeBody();
+      this.body.animate(dt, {
+        speed: moving,
+        phase: this.stepPhase,
+        grounded,
+        lookYaw: Math.atan2(Math.sin(this.yaw - this.bodyYaw), Math.cos(this.yaw - this.bodyYaw)),
+        lookPitch: this.pitch,
+      });
+    }
     if (this.transition) {
       const t = this.transition;
       t.t = Math.min(1, t.t + dt / t.dur);
       const e = t.t < 0.5 ? 4 * t.t * t.t * t.t : 1 - Math.pow(-2 * t.t + 2, 3) / 2;
       cam.position.lerpVectors(t.p0, this.eye, e);
       cam.quaternion.slerpQuaternions(t.q0, this.targetQ, e);
-      if (t.t >= 1) this.transition = null;
+      if (t.t >= 1) {
+        this.transition = null;
+        this.leavingBody = false;
+      }
     } else {
       cam.position.copy(this.eye);
       cam.quaternion.slerp(this.targetQ, Math.min(1, dt * 30));
     }
+    // with a wall right behind, the camera ends up in the dreamer's head: hide the body there
+    this.body.visible = showBody && cam.position.distanceTo(this.headW) > CHASE.hideWithin;
     if (Math.abs(cam.fov - this.fov) > 0.01) {
       cam.fov = this.fov;
       cam.updateProjectionMatrix();
     }
+  }
+
+  /**
+   * Third person on the street. The boom (head, over the right shoulder, then
+   * back along the view) is laid out and collided in fabric space next to the
+   * walker, and the camera is then folded at its own spot on the sheet, so it
+   * stays on the street's side of any curl. Sets this.eye.
+   */
+  private chaseOnStreet(dt: number, pitch: number): void {
+    const [bx, by, bz] = this.basis;
+    const cp = Math.cos(pitch);
+    const look = new THREE.Vector3(Math.sin(this.yaw) * cp, Math.sin(pitch), Math.cos(this.yaw) * cp);
+    const right = new THREE.Vector3(-Math.cos(this.yaw), 0, Math.sin(this.yaw));
+    const up = new THREE.Vector3().crossVectors(right, look);
+    const head = new THREE.Vector3(this.x, this.h + CHASE.head, this.z);
+    const back = up.multiplyScalar(CHASE.rise).addScaledVector(look, -CHASE.back);
+    // looking up, the camera slides along the street towards the feet instead of going under it
+    const low = head.y + back.y - CHASE.floor;
+    if (low < 0) back.y -= low;
+    const streamer = this.ctx.streamer;
+    const blocked = (x: number, y: number, z: number) => y < CHASE.floor * 0.5 || streamer.solid(x, z, CHASE.skin);
+    const folds = this.ctx.folds.active;
+    const rigid = new THREE.Vector3();
+    this.boom(dt, head, right, back, blocked, (p, out) => {
+      out.copy(p);
+      foldPoint(folds, p.x, p.z, out);
+      // Where crossing folds cut the sheet, a spot a few metres away can land somewhere else
+      // entirely. Carried rigidly with the dreamer's own frame it can't, so use that there.
+      rigid.copy(this.feetW).addScaledVector(bx, p.x - this.x).addScaledVector(by, p.y - this.h).addScaledVector(bz, p.z - this.z);
+      if (out.distanceToSquared(rigid) > 1.5 * 1.5) out.copy(rigid);
+    });
+  }
+
+  /** Third person inside the rotating hallway: the same boom, laid out in the corridor's frame and kept inside its walls. */
+  private chaseInHallway(dt: number, pitch: number): void {
+    const hall = this.ctx.hallway;
+    const r = hall.rider!;
+    const look = new THREE.Vector3();
+    const right = new THREE.Vector3();
+    const up = new THREE.Vector3();
+    hall.viewAxes(this.yaw - hall.axisYaw, pitch, look, right, up);
+    // the boom starts from the head (moved off the wall if the dreamer is crouched into a corner)
+    const head = hall.clampInside(r.p.clone().addScaledVector(r.up, CHASE.head), CHASE.skin + 0.01);
+    const back = up.multiplyScalar(CHASE.rise).addScaledVector(look, -CHASE.back);
+    const probe = new THREE.Vector3();
+    const blocked = (x: number, y: number, z: number) => !hall.inside(probe.set(x, y, z), CHASE.skin);
+    this.boom(dt, head, right, back, blocked, (p, out) => hall.toWorld(p, out));
+  }
+
+  /** Stand the body at the walker's feet (folded, or in the hallway) facing bodyYaw, and note where its head is. */
+  private placeBody(): void {
+    const hall = this.ctx.hallway;
+    const r = hall.rider;
+    const forward = new THREE.Vector3();
+    if (r) {
+      const right = new THREE.Vector3();
+      hall.viewAxes(this.bodyYaw - hall.axisYaw, 0, forward, right, this.upW);
+      forward.transformDirection(hall.basis);
+      this.upW.copy(r.up).transformDirection(hall.basis);
+      hall.toWorld(r.p, this.feetW);
+    } else {
+      // pose() has just folded the feet and the frame there
+      const [bx, by, bz] = this.basis;
+      forward.addScaledVector(bx, Math.sin(this.bodyYaw)).addScaledVector(bz, Math.cos(this.bodyYaw));
+      this.upW.copy(by);
+    }
+    this.body.place(this.feetW, this.upW, forward);
+    this.headW.copy(this.feetW).addScaledVector(this.upW, CHASE.head);
+  }
+
+  /**
+   * Swing the camera out from the head: first sideways to the shoulder (a wall
+   * at your side pulls it in behind your head), then back. Points are in the
+   * walker's simulation frame; toWorld folds the result into this.eye.
+   */
+  private boom(
+    dt: number,
+    head: THREE.Vector3,
+    right: THREE.Vector3,
+    back: THREE.Vector3,
+    blocked: (x: number, y: number, z: number) => boolean,
+    toWorld: (p: THREE.Vector3, out: THREE.Vector3) => void,
+  ): void {
+    const shoulder = head.clone().addScaledVector(right, CHASE.side);
+    this.sideT = boomFollow(this.sideT, clearance(head, shoulder, blocked), dt);
+    shoulder.copy(head).addScaledVector(right, CHASE.side * this.sideT);
+    const end = shoulder.clone().add(back);
+    this.backT = boomFollow(this.backT, clearance(shoulder, end, blocked), dt);
+    toWorld(shoulder.addScaledVector(back, this.backT), this.eye);
   }
 
   finishTransition(): void {

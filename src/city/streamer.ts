@@ -359,6 +359,28 @@ export class CityStreamer {
     return { x, z };
   }
 
+  /**
+   * Does a fabric point come within r of a building footprint? The
+   * third-person camera keeps out of buildings with this; trunks and lamp
+   * posts it may brush past, or it would lurch in at every one.
+   */
+  solid(x: number, z: number, r: number): boolean {
+    const cx0 = Math.floor((x - r) / CHUNK);
+    const cx1 = Math.floor((x + r) / CHUNK);
+    const cz0 = Math.floor((z - r) / CHUNK);
+    const cz1 = Math.floor((z + r) / CHUNK);
+    for (let cz = cz0; cz <= cz1; cz++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        for (const b of this.chunkData(cx, cz).rects) {
+          const dx = Math.max(b.x0 - x, 0, x - b.x1);
+          const dz = Math.max(b.z0 - z, 0, z - b.z1);
+          if (dx * dx + dz * dz < r * r) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   /** The loaded buildings (not roofs or chimneys) whose footprint comes within r of a fabric point. */
   buildingsNear(x: number, z: number, r: number): BuildingBox[] {
     const out: BuildingBox[] = [];

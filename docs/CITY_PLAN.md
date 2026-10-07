@@ -87,7 +87,7 @@ The architect looks down on the city like a model on a table.
 - **Fold list:** every fold is listed with its direction and a live angle slider, so you can sculpt after the fact. Undo removes the newest fold.
 - **Share:** the whole dream (seed, level, time, folds and quality) fits in the URL hash, so a link reproduces exactly what you see.
 
-### 4.2 Dream Walk (first person)
+### 4.2 Dream Walk (first or third person)
 
 The dreamer is dropped onto a sidewalk at street level.
 
@@ -96,8 +96,9 @@ The dreamer is dropped onto a sidewalk at street level.
 - **V** drops the street ahead away into a downward fold.
 - **E** rides the fold: the street you are standing on folds up and over the city and carries you with it, until you hang upside down 96 m above the districts behind you. **E** again lowers you back down.
 - **H** raises the rotating hallway around you on the nearest street. Press it again, or kick, to let it go.
+- **C** switches between first person and the camera behind the dreamer (4.6).
 - **K** is the kick. **Q** wakes you up into architect mode. **Esc** pauses.
-- On touch screens, a left-thumb stick walks, dragging anywhere else looks, and on-screen buttons jump, fold, ride, raise the hallway, kick and wake.
+- On touch screens, a left-thumb stick walks, dragging anywhere else looks, and on-screen buttons jump, fold, ride, raise the hallway, kick, switch the view and wake.
 - Buildings, trees, lamps and the monument are solid. Footsteps follow your pace.
 
 Switching between the two (Tab) is a camera flight, not a cut: the architect's view swoops down to the dreamer's eye, and back up again.
@@ -133,6 +134,19 @@ A game played in Dream Walk ("Take the job" on the intro): go down three dreams,
 - **Winning.** Take Level 1's kick (or crash Level 1) with the idea planted. The end card keeps the best topside time per job on your device, and "Share this job" links `#job=<seed>` so someone else can run the same three cities.
 
 The rules live in `src/game/heist.ts` with no rendering in them, so `tests/heist.test.ts` plays whole jobs: placement, the clock ladder, healing cost by depth, hits and grace, Limbo, the free kick after a blast, the totem gate and the win.
+
+### 4.6 Behind the dreamer
+
+**C** (or the View button) swaps the first-person eye for a camera standing behind the dreamer, so you can watch yourself walk up the curl. First person stays the default, and the choice is remembered on the device. It works everywhere Dream Walk does: on the street, on a ride, inside the hallway and through a whole job.
+
+- **The body.** A figure in a dark suit, white shirt and tie, built from a few capsules (`src/world/dreamer.ts`). Its walk is procedural, driven by the same stride clock as the footsteps: legs and arms swing against each other, knees fold through the swing, and at running pace it leans in and pumps its arms. In the air one knee comes up and the arms go out. It turns to face the way you walk, while its head turns towards where you look.
+- **The camera.** It looks exactly the way the dreamer does (tipped down 0.1 rad so the feet stay in the picture), from 3.8 m back, 0.35 m up and 0.6 m over the right shoulder.
+- **The boom lives in fabric space.** Like the walker, the camera's boom is laid out on the flat sheet next to the walker and only then folded, at the camera's own spot. Walls are building footprints there, so the boom swings out to the shoulder, then back, and stops short of the first footprint (widened by 0.3 m for the near plane). Because a point a little above the sheet folds to a point a little above the folded street, the camera stays on the street's side of any curl, however the city is bent. Looking up, it slides along the street towards your feet instead of going under it. Where crossing folds cut the sheet, a spot a few metres away can fold to somewhere else entirely, so there the camera is carried rigidly with the dreamer's own frame instead.
+- **Pull in fast, let out slow.** A wall behind you pulls the camera in at once; it eases back out over a second, so walking past corners doesn't make it pump. Pinned so close that it would be inside your head, the body is hidden and the view is simply first person.
+- **In the hallway** the same boom is laid out in the corridor's own frame and kept inside its four walls, which turn with it.
+- **Trees and lamp posts** don't stop the camera; pulling in at every one would make it lurch.
+
+`tests/chase.test.ts` pins the boom against walls, against the footprints of a real generated city from 400 spots and headings, inside a turning hallway, and the body's stride and placement.
 
 ---
 
@@ -300,8 +314,11 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 ### Milestone 1.3: the café explosion (done)
 - When stability hits zero the facades crack and blow out in slow motion, then the kick arrives on its own
 
-### Milestone 1.4: Heist mode (this release)
+### Milestone 1.4: Heist mode (done)
 - A game in the folded city: sleep machines down, found kicks up, a target to plant an idea in, a totem, and a topside clock that slows with depth (4.5)
+
+### Milestone 1.5: behind the dreamer (this release)
+- A third-person camera in Dream Walk that shows the dreamer's own body, walking, running and jumping, and keeps out of buildings, curls and the hallway's walls (4.6)
 
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
@@ -334,9 +351,10 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/world/` | Sky, sun and weather, dream levels, the projections crowd |
 | `src/world/hallway.ts` | The rotating hallway: geometry, shader painter and the rider's physics |
 | `src/world/collapse.ts` | The café explosion: the shard planner, the slow-motion timeline and the automatic kick |
-| `src/modes/` | Architect controls, Dream Walk controls, presets, the ride fold (`ride.ts`) |
+| `src/world/dreamer.ts` | The dreamer's body for the third-person view, and its procedural walk |
+| `src/modes/` | Architect controls, Dream Walk controls, presets, the ride fold (`ride.ts`), the third-person camera boom (`chase.ts`) |
 | `src/game/heist.ts` | Heist mode's rules: the topside clock, health, Limbo, placement and the kicks |
 | `src/game/marks.ts` | Heist mode's things in the city: sleep machine, gramophone, totem, target and their beams |
 | `src/fx/` | GPU picking, procedural audio, post-processing, the wet-street mirror (`reflection.ts`) |
 | `src/ui/` | Styles and the HUD totem |
-| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror, café explosion and Heist mode tests |
+| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror, café explosion, Heist mode and third-person camera tests |

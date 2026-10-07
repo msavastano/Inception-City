@@ -497,31 +497,61 @@ export class Hallway {
   pose(yaw: number, pitch: number, outPos: THREE.Vector3, outQ: THREE.Quaternion, bob = 0): void {
     const r = this.rider;
     if (!r) return;
-    const U = r.up;
-    const lim = HALL_HALF - 0.25;
-    const eye = r.p.clone().addScaledVector(U, EYE + bob);
     // keep the eye inside the walls
-    const c = Math.cos(this.angle);
-    const s = Math.sin(this.angle);
-    const ex = THREE.MathUtils.clamp(c * eye.x + s * eye.y, -lim, lim);
-    const ey = THREE.MathUtils.clamp(-s * eye.x + c * eye.y, -lim, lim);
-    eye.x = c * ex - s * ey;
-    eye.y = s * ex + c * ey;
-    outPos.copy(eye).applyMatrix4(this.basis).add(this.origin);
+    const eye = this.clampInside(r.p.clone().addScaledVector(r.up, EYE + bob), 0.25);
+    this.toWorld(eye, outPos);
 
+    const look = new THREE.Vector3();
+    const right = new THREE.Vector3();
+    const up = new THREE.Vector3();
+    this.viewAxes(yaw, pitch, look, right, up);
+    for (const v of [look, right, up]) v.transformDirection(this.basis);
+    outQ.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, look.negate()));
+  }
+
+  /**
+   * The rider's view in B for a heading (yaw, from the axis) and pitch: the
+   * way they look, their right and their up. With pitch 0, look is the way
+   * they face along the wall underfoot.
+   */
+  viewAxes(yaw: number, pitch: number, look: THREE.Vector3, right: THREE.Vector3, up: THREE.Vector3): void {
+    const U = this.rider ? this.rider.up : new THREE.Vector3(0, 1, 0);
     const F0 = new THREE.Vector3(0, 0, 1).addScaledVector(U, -U.z);
     if (F0.lengthSq() < 1e-6) F0.set(0, 0, 1);
     F0.normalize();
     const X0 = new THREE.Vector3().crossVectors(U, F0);
     const cp = Math.cos(pitch);
-    const look = new THREE.Vector3()
+    look
+      .set(0, 0, 0)
       .addScaledVector(X0, Math.sin(yaw) * cp)
       .addScaledVector(F0, Math.cos(yaw) * cp)
-      .addScaledVector(U, Math.sin(pitch))
-      .transformDirection(this.basis);
-    const upW = U.clone().transformDirection(this.basis);
-    const right = new THREE.Vector3().crossVectors(look, upW).normalize();
-    const up = new THREE.Vector3().crossVectors(right, look).normalize();
-    outQ.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, look.negate()));
+      .addScaledVector(U, Math.sin(pitch));
+    right.crossVectors(look, U).normalize();
+    up.crossVectors(right, look).normalize();
+  }
+
+  /** Move a point in B (in place) to at least `margin` inside the corridor's walls. */
+  clampInside(p: THREE.Vector3, margin: number): THREE.Vector3 {
+    const lim = HALL_HALF - margin;
+    const c = Math.cos(this.angle);
+    const s = Math.sin(this.angle);
+    const sx = THREE.MathUtils.clamp(c * p.x + s * p.y, -lim, lim);
+    const sy = THREE.MathUtils.clamp(-s * p.x + c * p.y, -lim, lim);
+    p.x = c * sx - s * sy;
+    p.y = s * sx + c * sy;
+    return p;
+  }
+
+  /** Is a point in B inside the corridor's walls, at least `margin` from all four? (The ends are open.) */
+  inside(p: THREE.Vector3, margin: number): boolean {
+    const c = Math.cos(this.angle);
+    const s = Math.sin(this.angle);
+    const lim = HALL_HALF - margin;
+    return Math.abs(c * p.x + s * p.y) <= lim && Math.abs(-s * p.x + c * p.y) <= lim;
+  }
+
+  /** A point in B, in the world. */
+  toWorld(p: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
+    return out.copy(p).applyMatrix4(this.basis).add(this.origin);
   }
 }

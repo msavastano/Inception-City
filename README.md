@@ -21,6 +21,8 @@ It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is
 | ![Mid-ride: the street behind curls up and over, a park hanging overhead](docs/images/ride-curl.jpg) | ![Upside down 96 m up, looking up at the city below](docs/images/ride-top.jpg) |
 | **Rooms behind the windows** | **Wet streets in the Rain** |
 | ![A Paris facade at night: lit windows open onto rooms with curtains, lamps, pictures and sofas](docs/images/windows.jpg) | ![A boulevard at dusk in the rain, its puddles mirroring the brick terraces, the lamps and the shops](docs/images/rain.jpg) |
+| **Behind the dreamer (C)** | **Heading for the curl** |
+| ![The third-person view: the dreamer in a dark suit crossing the Circus, the spinning-top monument ahead](docs/images/behind-street.jpg) | ![From behind, the dreamer walks towards a boulevard that bends up into the sky, its buildings curving with it](docs/images/behind-curl.jpg) |
 | **The café explosion** | **Hanging in slow motion** |
 | ![Stability at zero: the facades along a Paris street crack open and blow out, stone and awnings flying into the street](docs/images/collapse-street.jpg) | ![From the sidewalk, looking up: blown-out walls and a cloud of debris hanging in the air above the street](docs/images/collapse-sidewalk.jpg) |
 
@@ -36,11 +38,12 @@ It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is
 - **Sculpt after the fact:** every fold has its own angle slider, and Undo removes the newest.
 - **Share:** the whole dream (seed, level, time of day and folds) fits in the link.
 
-**Dream Walk** puts you on the sidewalk in first person.
+**Dream Walk** puts you on the sidewalk in first person, or behind your own shoulder.
 
 - Walk and run through the streets, and fold the street ahead of you to watch the road rise into a wall, then climb it.
 - **Ride the fold (E):** the street you are standing on folds up and over the city and carries you with it, until you hang upside down 96 m above the districts behind you.
 - **The rotating hallway (H):** a hotel corridor rises around you and turns like a barrel. Its walls carry you up until you slide onto the next one, so you end up running along the walls and the ceiling. Walk out of either end to get back to the street.
+- **Behind the dreamer (C):** swap the first-person eye for a camera over your own shoulder and watch yourself walk, run and jump, up the curl and along the hallway's walls. The camera keeps out of buildings and stays on your side of the folded street.
 - Trees, lamps, buildings and the monument are solid. The projections walk the sidewalks with you.
 - Press K for the kick: every fold collapses at once with a ripple and a BRAAAM, and you wake up a level.
 - **The café explosion:** fold too hard and stability hits zero. The facades around you crack and blow out into the street, then the dream slows almost to a stop and the stone, glass and shop awnings hang in the air while you walk among them, until the kick arrives on its own. It happens in architect mode too, around the spot you are looking at.
@@ -69,11 +72,11 @@ It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is
 | Move | Right-drag to orbit, middle-drag to pan, scroll to zoom (the Orbit tool puts orbit on the left button) | WASD or arrows, Shift to run, Space to jump |
 | Look | Same as move | Mouse (click to capture it), or drag |
 | Fold | Drag across a street with the Fold tool (F) | F folds the street ahead up, V drops it away, E rides the street you stand on |
-| Other | R raise brush, O orbit, Z undo, H the Hallway dreamscape, double-click to fly to a spot | H raises or lets go of the rotating hallway, Esc to pause, Q to wake up |
+| Other | R raise brush, O orbit, Z undo, H the Hallway dreamscape, double-click to fly to a spot | H raises or lets go of the rotating hallway, C switches between first person and the camera behind you, Esc to pause, Q to wake up |
 | Anywhere | Tab switches mode, K is the kick, 1 to 4 pick the level, M mutes | |
 | Heist mode | | As Dream Walk; K uses this level's kick once you have found it, Esc pauses or abandons the job |
 
-On touch screens: in architect mode one finger folds or paints (or orbits with the Orbit tool) and two fingers zoom and pan. In Dream Walk a left-thumb stick walks, dragging anywhere else looks, and buttons jump, fold, ride, raise the hallway, kick and wake.
+On touch screens: in architect mode one finger folds or paints (or orbits with the Orbit tool) and two fingers zoom and pan. In Dream Walk a left-thumb stick walks, dragging anywhere else looks, and buttons jump, fold, ride, raise the hallway, kick, switch the view and wake.
 
 ### Link parameters
 

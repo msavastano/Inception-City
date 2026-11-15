@@ -1,4 +1,4 @@
-import { BLOCK, CHUNK, CHUNK_BLOCKS, LAMP_OFFSET, LAMP_SPACING, SLAB, streetHalfWidth } from '../core/config';
+import { BLOCK, BOULEVARD_TREES, CHUNK, CHUNK_BLOCKS, LAMP_OFFSET, LAMP_SPACING, PLAZA_TREE_INSET, SLAB, streetHalfWidth } from '../core/config';
 import { fbm2, hash3, rng } from '../core/rng';
 
 /**
@@ -186,10 +186,10 @@ export function generateChunk(cx: number, cz: number, seed: number): ChunkData {
 
   // Boulevard trees: each chunk owns the boulevards along its west and south edges.
   const bRand = rng(Math.floor(hash3(cx, cz, seed + 99) * 4294967296));
-  const lat = streetHalfWidth(0) - 2.5;
+  const lat = streetHalfWidth(0) - BOULEVARD_TREES.inset;
   for (let k = 0; k < CHUNK_BLOCKS; k++) {
-    for (const along of [22, 32, 42]) {
-      const a = k * BLOCK + along;
+    for (let t = 0; t < BOULEVARD_TREES.count; t++) {
+      const a = k * BLOCK + BOULEVARD_TREES.first + t * BOULEVARD_TREES.step;
       for (const side of [-1, 1]) {
         const tone = bRand();
         addTree({ x: cx * CHUNK + side * lat, z: cz * CHUNK + a, yaw: bRand() * 6.28, scale: 0.9 + tone * 0.35, tone });
@@ -368,7 +368,7 @@ function parkBlock(rect: Rect, rand: () => number, addTree: (t: PropRec) => void
 }
 
 function plazaBlock(rect: Rect, rand: () => number, addTree: (t: PropRec) => void): void {
-  const inset = 5;
+  const inset = PLAZA_TREE_INSET;
   for (const [x, z] of [
     [rect.x0 + inset, rect.z0 + inset],
     [rect.x1 - inset, rect.z0 + inset],

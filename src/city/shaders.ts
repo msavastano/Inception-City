@@ -1,4 +1,18 @@
-import { BLOCK, BOULEVARD_HALF, CHUNK, CHUNK_BLOCKS, COLLAPSE_RADIUS, LAMP_OFFSET, LAMP_SPACING, MAX_FOLDS, SIDEWALK, STREET_HALF } from '../core/config';
+import {
+  BLOCK,
+  BOULEVARD_HALF,
+  BOULEVARD_TREES,
+  CHUNK,
+  CHUNK_BLOCKS,
+  COLLAPSE_RADIUS,
+  LAMP_OFFSET,
+  LAMP_SPACING,
+  LANTERN_HEIGHT,
+  MAX_FOLDS,
+  PLAZA_TREE_INSET,
+  SIDEWALK,
+  STREET_HALF,
+} from '../core/config';
 
 const f = (n: number) => n.toFixed(4);
 
@@ -162,9 +176,12 @@ uniform float uNight;
 uniform float uSnow;
 uniform float uTime;
 uniform vec4 uBlast;   // the café explosion: centre x, z (fabric), wave front radius, strength (0 while the dream holds)
+uniform vec4 uLook;    // ambient occlusion strength, night glow strength (src/world/look.ts)
 float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 
 // The room behind the window this pixel belongs to, filled in by facade().
+vec2 gPaneM;     // size of the window opening (metres)
+float gShade;    // 1 in the shade under a shop awning
 vec2 gRoom;      // position on the room's window wall: along the wall, above its floor (metres)
 vec3 gRoomSize;  // width, height, depth (metres)
 vec2 gPane;      // position inside the window opening, 0..1
@@ -189,6 +206,7 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
   vec3 an = abs(vObjN);
   col = vColor.rgb;
   win = 0.0; lit = 0.0; glassy = 0.0; gLod = 0.0;
+  gPaneM = vec2(1.0); gShade = 0.0;
   setRoom(0.0, 1.0, 0.0, 1.0, 1.0, vec2(0.0), vec2(0.0), 0.0, 0.0);
   litCol = mix(vec3(1.0, 0.72, 0.42), vec3(1.0, 0.9, 0.75), hash12(vec2(seed * 91.0, 3.0)));
 
@@ -204,6 +222,7 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
         vec2 id = vec2(floor(u / 3.3 + seed), 99.0 + seed * 13.0);
         lit = dormer * step(hash12(id), 0.28);
         setRoom(cell * 3.3, 3.3, vLocal.y - 0.3, 2.9, 3.6, vec2((cell - 0.36) / 0.28, (vLocal.y - 0.9) / 2.1), id, lit * 0.8, 3.0);
+        gPaneM = vec2(0.92, 2.1);
         col = mix(col, vec3(0.92, 0.94, 0.98), uSnow * 0.85);
       } else {
         col = mix(col, vec3(0.95, 0.96, 1.0), uSnow);
@@ -245,6 +264,9 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
       // shop interiors: dimmer than the flats above, brighter towards the ceiling
       lit = glass * (0.16 + 0.4 * pick) * (0.45 + 0.55 * smoothstep(0.25, 3.3, v));
       setRoom(u, 4.2, v, 4.0, 6.5, vec2((bay - 0.12) / 0.76, (v - 0.25) / 3.05), vec2(floor(u / 4.2), seed * 31.0), 0.3 + 0.5 * pick, 1.0);
+      gPaneM = vec2(3.19, 3.05);
+      // the awning throws its shade down the top of the shop window
+      gShade = step(0.08, bay) * step(bay, 0.92) * smoothstep(2.3, 3.35, v) * step(v, 3.35);
       col = mix(col, vec3(0.08, 0.08, 0.09), glass);
     } else {
       float level = floor((v - shopH) / fh);
@@ -264,6 +286,7 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
       float bright = step(on, 0.42) * (0.4 + on * 1.4);
       lit = w * bright * (0.6 + 0.4 * smoothstep(0.55, 2.75, fv));
       setRoom(u, 6.0, fv, fh, 4.5 + 2.0 * hash12(id + 7.0), vec2((cu - 0.3) / 0.42, (fv - 0.55) / 2.2), id, bright, 0.0);
+      gPaneM = vec2(1.26, 2.2);
     }
   } else if (style < 1.5) {
     // Glass curtain wall.
@@ -281,6 +304,7 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
     lit = win * bright;
     litCol = mix(litCol, vec3(0.75, 0.88, 1.0), 0.6);
     setRoom(u, 6.4, fv - 0.7, fh - 0.7, 8.0, vec2(fract(u / 1.6), (fv - 0.7) / (fh - 0.7)), id, bright, 2.0);
+    gPaneM = vec2(1.6, fh - 0.7);
   } else if (style < 2.5) {
     // Modernist concrete: ribbon windows.
     float fh = 3.6;
@@ -297,6 +321,7 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
     lit = win * bright;
     if (office > 0.5) litCol = mix(litCol, vec3(0.8, 0.9, 1.0), 0.5);
     setRoom(u, 5.4, fv, fh - 0.3, 5.5 + 2.0 * office, vec2(fract(u / 1.8), (fv - 1.0) / 1.9), id, bright, 2.0 * office);
+    gPaneM = vec2(1.8, 1.9);
   } else {
     // Old-town brick.
     float fh = 3.1;
@@ -315,6 +340,7 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
     float bright = step(on, 0.45) * (0.4 + on * 1.3);
     lit = w * bright;
     setRoom(u, 5.4, fv, fh - 0.1, 4.0 + 1.5 * hash12(id + 3.0), vec2((cu - 0.32) / 0.36, (fv - 0.7) / 1.7), id, bright, 0.0);
+    gPaneM = vec2(0.97, 1.7);
   }
   // grime towards the street
   col *= 0.82 + 0.18 * smoothstep(0.0, 9.0, v);
@@ -565,12 +591,68 @@ vec4 drapes(vec2 p, float s) {
   }
   return res;
 }
+
+// Ambient occlusion for a wall, worked out from where the pixel is (nothing is sampled).
+// x: how much of the sky's light reaches it, y: how deep it is in the corner the wall makes with the pavement.
+vec2 wallOcclusion() {
+  if (vInfo.x > 9.5) return vec2(1.0, 0.0);
+  if (vInfo.x > 8.5) {
+    // a mansard: the gutter where the slope meets the wall below is the darkest part
+    return vec2(mix(0.78, 1.0, smoothstep(0.0, 1.4, vLocal.y)), 0.0);
+  }
+  if (abs(vObjN.y) > 0.5) return vec2(1.0, 0.0);
+  // A street is a canyon: the foot of a wall sees a strip of sky, the cornice sees half of it.
+  float open = smoothstep(0.0, 24.0, vFabric.y);
+  // and the last metre and a half sits in the corner
+  float foot = exp(-max(vLocal.y, 0.0) / 0.55);
+  return vec2(mix(0.56, 1.0, open) * (1.0 - 0.42 * foot), foot);
+}
+
+// A window sits back in its wall, so its edges are in the wall's shade, most of all under the lintel.
+float openingRim() {
+  vec2 e = min(gPane, 1.0 - gPane) * gPaneM;
+  float lintel = (1.0 - gPane.y) * gPaneM.y;
+  float rim = smoothstep(0.0, 0.16, min(e.x, e.y)) * (0.72 + 0.28 * smoothstep(0.0, 0.5, lintel));
+  // a rim narrower than a pixel would sparkle as you walk, so it thins out with distance
+  vec3 px = fwidth(vLocal);
+  float fade = 1.0 - smoothstep(0.06, 0.3, max(px.x + px.z, px.y));
+  return mix(1.0, mix(0.5, 1.0, clamp(rim, 0.0, 1.0)), fade);
+}
+
+float streetHalf(float line) { return mod(line, ${f(CHUNK_BLOCKS)}) < 0.5 ? ${f(BOULEVARD_HALF)} : ${f(STREET_HALF)}; }
+
+// The street lamps' light on the facades at night. The lamps stand on a known lattice
+// (a metre in from every building line), so the nearest one is found without looking anything up.
+float lampWash() {
+  if (abs(vObjN.y) > 0.5 || vInfo.x > 8.5 || vFabric.y > 16.0) return 0.0;
+  bool xFace = abs(vObjN.x) > 0.5;
+  float across = xFace ? vFabric.x : vFabric.z;
+  float along = xFace ? vFabric.z : vFabric.x;
+  float line = floor(across / ${f(BLOCK)} + 0.5);
+  float off = across - line * ${f(BLOCK)};
+  // only walls that face that street, and stand on it
+  if (-sign(off) * (xFace ? vObjN.x : vObjN.z) < 0.5) return 0.0;
+  float lat = abs(abs(off) - (streetHalf(line) - 1.0));
+  if (lat > 6.0) return 0.0;
+  float da = along - (floor((along - ${f(LAMP_OFFSET)}) / ${f(LAMP_SPACING)} + 0.5) * ${f(LAMP_SPACING)} + ${f(LAMP_OFFSET)});
+  float dy = vFabric.y - ${f(LANTERN_HEIGHT - 0.4)};
+  float r2 = da * da + dy * dy;
+  // a pool of light beside the lantern that is gone before the next lamp's begins, so the night's blue stays between them
+  float d = lat + 1.6;
+  return d * d * d / pow(d * d + r2, 1.5) / (1.0 + lat * lat * 0.25);
+}
 `;
 
 export const BUILDING_FRAG_COLOR = /* glsl */ `
 #include <color_fragment>
 float winMask; float winLit; float glassy; vec3 litCol;
 facade(diffuseColor.rgb, winMask, winLit, glassy, litCol);
+vec2 wallAO = wallOcclusion();
+float rimAO = 1.0;
+if (winMask > 0.01) rimAO = mix(1.0, openingRim(), (1.0 - gLod) * uLook.x);
+rimAO *= 1.0 - 0.35 * gShade * uLook.x;
+// dirt gathers where the wall meets the pavement, and the glass darkens towards its frame
+diffuseColor.rgb *= (1.0 - 0.24 * wallAO.y * uLook.x) * mix(1.0, rimAO, 0.6);
 // The café explosion: a blown-out cell opens onto the room behind it like a window with no glass.
 vec4 blast = blastWall();
 float hole = blast.x;
@@ -596,7 +678,7 @@ if ((winMask > 0.01 || hole > 0.5) && gLod < 0.98) {
     nightCol = mix(nightCol, dr.rgb * (light * gRoomOn * (dr.a < 0.5 ? 0.5 : 0.3) + 0.01), dr.a);
     dayCol = mix(dayCol, dr.rgb * 0.08, dr.a);
   }
-  vec3 near = (nightCol * uNight + dayCol * (1.0 - uNight)) * max(winMask, hole) * soot;
+  vec3 near = (nightCol * mix(1.0, rimAO, 0.5) * uNight + dayCol * rimAO * (1.0 - uNight)) * max(winMask, hole) * soot;
   winGlow = mix(near, winGlow, gLod);
 }
 if (hole > 0.5) {
@@ -620,6 +702,16 @@ metalnessFactor = mix(metalnessFactor, 0.35 + 0.5 * glassy, winMask);
 export const BUILDING_FRAG_EMISSIVE = /* glsl */ `
 #include <emissivemap_fragment>
 totalEmissiveRadiance += winGlow;
+if (uNight > 0.02 && uLook.y > 0.0) totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.72, 0.42) * (lampWash() * uNight * uLook.y * 0.5);
+`;
+// Runs after lighting: the sky's light (not the sun's) is dimmed where the pixel cannot see much sky.
+export const BUILDING_FRAG_AO = /* glsl */ `
+#include <aomap_fragment>
+{
+  float skyAO = mix(1.0, wallAO.x * rimAO, uLook.x);
+  reflectedLight.indirectDiffuse *= skyAO;
+  reflectedLight.indirectSpecular *= mix(1.0, skyAO, 0.7);
+}
 `;
 
 // ---------------------------------------------------------------------------
@@ -677,6 +769,7 @@ uniform vec4 uCrease;   // preview hinge (hx, hz, nx, nz)
 uniform float uCreaseOn;
 uniform vec4 uBrush;    // x, z, radius, on
 uniform vec3 uSeaColor;
+uniform vec4 uLook;     // ambient occlusion strength, night glow strength (src/world/look.ts)
 
 float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p) {
@@ -712,6 +805,17 @@ float checker(vec2 p, vec2 w) {
   w = max(w, 1e-4);
   vec2 i = 2.0 * (abs(fract((p - 0.5 * w) * 0.5) - 0.5) - abs(fract((p + 0.5 * w) * 0.5) - 0.5)) / w;
   return 0.5 - 0.5 * i.x * i.y;
+}
+// How much of the sky's light reaches this pixel (ambient occlusion), 1 in the open.
+float gAO = 1.0;
+// The shade under a tree: a soft pool below the crown and a tight one round the trunk. d2: squared metres from the trunk.
+float crownShade(float d2) { return 0.3 * exp(-d2 / 7.0) + 0.35 * exp(-d2 / 0.25); }
+// Boulevard trees stand in a row down each side (see BOULEVARD_TREES in src/core/config.ts).
+float boulevardTrees(float lateral, float along) {
+  float a = mod(along, ${f(BLOCK)});
+  float nearest = clamp(floor((a - ${f(BOULEVARD_TREES.first)}) / ${f(BOULEVARD_TREES.step)} + 0.5), 0.0, ${f(BOULEVARD_TREES.count - 1)}) * ${f(BOULEVARD_TREES.step)} + ${f(BOULEVARD_TREES.first)};
+  vec2 d = vec2(lateral - ${f(BOULEVARD_HALF - BOULEVARD_TREES.inset)}, a - nearest);
+  return crownShade(dot(d, d));
 }
 // How wet this pixel is (0 dry, 1 soaked) and how much of it is standing water.
 float gWet = 0.0;
@@ -765,6 +869,8 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
   // puddle edges soften to at least a pixel wide
   float pw = fwidth(pn);
   float pondWater = 0.0;
+  // the block this pixel belongs to; out in the street, the block on this side of the centre line
+  float kind = blockKind(f);
 
   if (walk.x + walk.y > 0.5) {
     if (road.x + road.y > 0.5) {
@@ -788,7 +894,6 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
       gPuddle = smoothstep(0.66 - pw, 0.7 + pw, pn);
     }
   } else {
-    float kind = blockKind(f);
     vec2 bc = (floor(f / ${f(BLOCK)}) + 0.5) * ${f(BLOCK)};
     vec2 q = f - bc;
     if (kind < 0.5) {
@@ -834,9 +939,53 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
     } else col = pavement * (0.94 + 0.06 * stripes(turn * 16.0 - 0.75, 0.5, tw * 16.0));
   }
 
+  // Ambient occlusion. The generator's layout is known here, so the shade that walls, trees and
+  // lamp posts cast on the sky's light is computed, not sampled.
+  if (uLook.x > 0.0) {
+    vec2 inb = dl - hw;   // metres into the block from its building lines (negative out in the street)
+    float occ = 0.0;
+    float grime = 0.0;
+    if (kind < 0.5) {
+      if (walk.x + walk.y > 0.5) {
+        // A perimeter block's wall stands on the building line and hides half the sky at its foot,
+        // less further out. (The block across the street is not known here, so each side's shade
+        // fades out at the centre line and the two always meet.)
+        vec2 gap = max(-inb, 0.0);
+        float d = length(gap);
+        float wall = 0.5 * (1.0 - d * inversesqrt(d * d + 324.0));
+        wall *= 1.0 - smoothstep(0.5, 1.0, max(gap.x / hw.x, gap.y / hw.y));
+        // and the corner where it meets the pavement is darker still
+        occ = wall + 0.22 * exp(-d / 0.5);
+        grime = exp(-d / 0.4);
+      } else {
+        // the courtyard is a well
+        occ = mix(0.5, 0.22, smoothstep(11.0, 26.0, min(inb.x, inb.y)));
+      }
+    }
+    // things too small to see from far away fade out before they turn to noise
+    float fine = 1.0 - smoothstep(0.2, 0.8, max(fw.x, fw.y));
+    float small = 0.0;
+    if (fine > 0.0) {
+      if (hw.x > ${f(BOULEVARD_HALF - 0.5)}) small = boulevardTrees(dl.x, f.y);
+      if (hw.y > ${f(BOULEVARD_HALF - 0.5)}) small = max(small, boulevardTrees(dl.y, f.x));
+      if (kind > 1.5 && kind < 2.5) { vec2 t = inb - ${f(PLAZA_TREE_INSET)}; small = max(small, crownShade(dot(t, t))); }
+      // lamp posts stand a metre in from the building line
+      vec2 da = f.yx - (floor((f.yx - ${f(LAMP_OFFSET)}) / ${f(LAMP_SPACING)} + 0.5) * ${f(LAMP_SPACING)} + ${f(LAMP_OFFSET)});
+      vec2 dp = inb + 1.0;
+      vec2 post = exp(-(dp * dp + da * da) / 0.1) * walk;
+      small = max(small, 0.4 * max(post.x, post.y));
+    }
+    // the monument balances on its point
+    occ = max(occ, 0.5 * exp(-r0 * r0 / 40.0));
+    gAO = (1.0 - occ) * (1.0 - small * fine);
+    col *= 1.0 - 0.22 * grime * uLook.x;
+  }
+
   // Street-lamp light pools at night.
   float pools = lampPool(off.x, f.y, hw.x) * walk.x + lampPool(off.y, f.x, hw.y) * walk.y;
-  glow += vec3(1.0, 0.72, 0.42) * pools * uNight * 0.45;
+  // pale paving throws more of the lamps' light back than asphalt does
+  float pale = smoothstep(0.08, 0.6, dot(col, vec3(0.3333)));
+  glow += vec3(1.0, 0.72, 0.42) * pools * uNight * 0.45 * mix(1.0, 0.45 + 0.75 * pale, uLook.y);
 
   // Snow and rain.
   float snowy = uSnow * (road.x + road.y > 0.5 ? 0.55 : 0.92);
@@ -862,6 +1011,7 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
     vec3 water = uSeaColor * (0.85 + 0.25 * vnoise(f * 0.05 + uTime * 0.05));
     col = mix(col, water, sea);
     rough = mix(rough, 0.12, sea);
+    gAO = mix(gAO, 1.0, sea);
     // Limbo's sea mirrors whatever is left of the city
     gWet = max(gWet, sea * 0.8);
     gPuddle = max(gPuddle, sea * 0.6);
@@ -964,6 +1114,12 @@ roughnessFactor = groundRough;
 // the mirrored city (or, without a mirror, to the reflected street lamps).
 export const GROUND_FRAG_WET = /* glsl */ `
 #include <aomap_fragment>
+{
+  // the sky's light (not the sun's) is dimmed where the pixel cannot see much sky
+  float skyAO = mix(1.0, gAO, uLook.x);
+  reflectedLight.indirectDiffuse *= skyAO;
+  reflectedLight.indirectSpecular *= mix(1.0, skyAO, 0.7);
+}
 if (gl_FrontFacing && gWet > 0.001) {
   float wetNV = saturate(dot(geometryNormal, geometryViewDir));
   // a generous Fresnel: a rain-soaked street reads as a mirror long before physics says it should
@@ -1004,6 +1160,7 @@ varying vec3 vColorV;
 varying float vPart;
 varying vec2 vTone;      // tone, suspicion
 varying vec3 vFabric;
+varying float vUp;       // height on the model, before scaling (for ambient occlusion)
 ${FOLD_GLSL}
 
 vec3 rotY(vec3 v, float a) { float c = cos(a), s = sin(a); return vec3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z); }
@@ -1012,7 +1169,7 @@ vec3 rotAxis(vec3 v, vec3 k, float a) { float c = cos(a), s = sin(a); return v *
 void propVertex(out vec3 P, out vec3 N) {
   if (iParam.x <= 0.0) {
     P = vec3(0.0); N = vec3(0.0, 1.0, 0.0);
-    vColorV = P; vPart = 0.0; vTone = vec2(0.0); vFabric = P;
+    vColorV = P; vPart = 0.0; vTone = vec2(0.0); vFabric = P; vUp = 0.0;
     return;
   }
   float kind = iState.y;
@@ -1053,6 +1210,7 @@ void propVertex(out vec3 P, out vec3 N) {
   vPart = aPart;
   vTone = vec2(iParam.y, iState.x);
   vFabric = fab;
+  vUp = position.y;
   P = fab;
   N = nrm;
   applyFolds(iPosYaw.xz, P, N);
@@ -1064,8 +1222,10 @@ varying vec3 vColorV;
 varying float vPart;
 varying vec2 vTone;
 varying vec3 vFabric;
+varying float vUp;
 uniform float uNight;
 uniform float uSnow;
+uniform vec4 uLook;      // ambient occlusion strength, night glow strength (src/world/look.ts)
 uniform vec3 uFoliageA;
 uniform vec3 uFoliageB;
 `;
@@ -1076,8 +1236,14 @@ diffuseColor.rgb = vColorV;
 float propMetal = 0.0;
 float propRough = 0.8;
 vec3 propGlow = vec3(0.0);
+// Ambient occlusion: whatever stands on the pavement is darkest where it meets it
+float propAO = vPart < 0.5 || (vPart > 2.5 && vPart < 3.5) ? mix(0.5, 1.0, smoothstep(0.0, 0.6, vUp)) : 1.0;
 if (vPart > 0.5 && vPart < 1.5) {
   diffuseColor.rgb = mix(uFoliageA, uFoliageB, vTone.x) * (0.75 + 0.5 * vColorV.g);
+  // the underside of a crown looks at the pavement, not the sky, and little sun gets in there
+  float crown = smoothstep(2.8, 7.2, vUp);
+  propAO = mix(0.42, 1.0, crown);
+  diffuseColor.rgb *= mix(1.0, 0.72 + 0.28 * crown, uLook.x);
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.95, 0.98), uSnow * 0.7);
 } else if (vPart > 1.5 && vPart < 2.5) {
   propGlow = vec3(1.0, 0.78, 0.5) * (0.25 + 3.0 * uNight);
@@ -1112,6 +1278,14 @@ metalnessFactor = propMetal;
 export const PROP_FRAG_EMISSIVE = /* glsl */ `
 #include <emissivemap_fragment>
 totalEmissiveRadiance += propGlow;
+`;
+export const PROP_FRAG_AO = /* glsl */ `
+#include <aomap_fragment>
+{
+  float skyAO = mix(1.0, propAO, uLook.x);
+  reflectedLight.indirectDiffuse *= skyAO;
+  reflectedLight.indirectSpecular *= mix(1.0, skyAO, 0.7);
+}
 `;
 
 // ---------------------------------------------------------------------------

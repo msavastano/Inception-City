@@ -35,7 +35,15 @@ export interface DreamLevel {
   foliageA: number;
   foliageB: number;
   sea: number;
-  /** Display grade: split-tone tint, saturation, contrast. */
+  /**
+   * The air. haze: how much a kilometre of clear air fades what is behind it (1 leaves about a third showing).
+   * mist: the same again for the layer that lies on the ground and thins out with height.
+   */
+  haze: number;
+  mist: number;
+  /** Exposure, before the tone curve. */
+  exposure: number;
+  /** Display grade: split-tone tint, saturation, contrast (1 leaves the tone curve as it is). */
   tint: [number, number, number];
   saturation: number;
   contrast: number;
@@ -82,9 +90,12 @@ export const LEVELS: DreamLevel[] = [
     foliageA: 0x3a5a22,
     foliageB: 0x6b8a34,
     sea: 0x52616b,
+    haze: 0.6,
+    mist: 0.6,
+    exposure: 0.8,
     tint: [1.05, 1.0, 0.94],
-    saturation: 1.14,
-    contrast: 1.08,
+    saturation: 1.0,
+    contrast: 1.0,
     drone: 55,
   },
   {
@@ -113,9 +124,12 @@ export const LEVELS: DreamLevel[] = [
     foliageA: 0x6a4a1c,
     foliageB: 0xa8642a,
     sea: 0x3c4a52,
+    haze: 1.6,
+    mist: 2.4,
+    exposure: 1.15,
     tint: [0.94, 1.0, 1.06],
-    saturation: 0.85,
-    contrast: 1.1,
+    saturation: 0.82,
+    contrast: 1.03,
     drone: 49,
   },
   {
@@ -144,9 +158,12 @@ export const LEVELS: DreamLevel[] = [
     foliageA: 0x2e4a3a,
     foliageB: 0x46604c,
     sea: 0x6a7884,
+    haze: 2.2,
+    mist: 1.6,
+    exposure: 1.0,
     tint: [0.97, 1.0, 1.05],
-    saturation: 0.75,
-    contrast: 1.02,
+    saturation: 0.72,
+    contrast: 0.98,
     drone: 41.2,
   },
   {
@@ -175,9 +192,12 @@ export const LEVELS: DreamLevel[] = [
     foliageA: 0x4a4a42,
     foliageB: 0x6a665a,
     sea: 0x4f5a5e,
+    haze: 1.0,
+    mist: 1.4,
+    exposure: 1.1,
     tint: [1.02, 1.0, 0.98],
     saturation: 0.45,
-    contrast: 1.12,
+    contrast: 1.05,
     drone: 36.7,
   },
 ];

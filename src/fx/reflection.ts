@@ -63,7 +63,7 @@ export function mirrorCamera(main: THREE.PerspectiveCamera, mirror: THREE.Perspe
  * they keep their plain sky reflection.
  */
 export class WetReflection {
-  private target = new THREE.WebGLRenderTarget(1, 1, {
+  readonly target = new THREE.WebGLRenderTarget(1, 1, {
     type: THREE.HalfFloatType,
     generateMipmaps: true,
     minFilter: THREE.LinearMipmapLinearFilter,

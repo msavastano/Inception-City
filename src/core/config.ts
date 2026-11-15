@@ -38,6 +38,16 @@ export const COLLAPSE_RADIUS = 140;
 export const LAMP_SPACING = 32;
 export const LAMP_OFFSET = 16;
 
+/**
+ * Boulevard trees: a row down each side, this far in from the building line, at these
+ * distances into every block. The ground shader paints their shade from the same numbers.
+ */
+export const BOULEVARD_TREES = { inset: 2.5, first: 22, step: 10, count: 3 } as const;
+/** Plaza trees stand this far in from each corner of the block. */
+export const PLAZA_TREE_INSET = 5;
+/** Height of a street lamp's lantern above the pavement. */
+export const LANTERN_HEIGHT = 4.95;
+
 export function streetHalfWidth(lineIndex: number): number {
   return mod(lineIndex, CHUNK_BLOCKS) === 0 ? BOULEVARD_HALF : STREET_HALF;
 }

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CHUNK } from '../core/config';
+import { CHUNK, LANTERN_HEIGHT } from '../core/config';
 
 /** Unit box standing on the origin: x,z ∈ [-0.5, 0.5], y ∈ [0, 1]. Height segments let it bend inside a curl. */
 export function buildingGeometry(heightSegments = 6): THREE.BufferGeometry {
@@ -50,7 +50,7 @@ export function lampGeometry(): THREE.BufferGeometry {
   const iron: [number, number, number] = [0.07, 0.09, 0.08];
   const post = tag(new THREE.CylinderGeometry(0.07, 0.13, 4.6, 5, 1, true).translate(0, 2.3, 0), 0, iron);
   const base = tag(new THREE.CylinderGeometry(0.22, 0.26, 0.6, 5, 1, true).translate(0, 0.3, 0), 0, iron);
-  const lantern = tag(new THREE.CylinderGeometry(0.26, 0.16, 0.6, 5).translate(0, 4.95, 0), 2, [1, 0.9, 0.7]);
+  const lantern = tag(new THREE.CylinderGeometry(0.26, 0.16, 0.6, 5).translate(0, LANTERN_HEIGHT, 0), 2, [1, 0.9, 0.7]);
   const cap = tag(new THREE.ConeGeometry(0.32, 0.3, 5).translate(0, 5.4, 0), 0, iron);
   return merge([post, base, lantern, cap]);
 }

@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { U } from '../city/materials';
 import { WetReflection } from '../fx/reflection';
+import { SKY_GLSL } from './atmosphere';
+import { LOOK } from './look';
 import { DreamLevel, LEVELS, Palette, Weather } from './themes';
 
 const SKY_VERT = /* glsl */ `
@@ -12,15 +14,10 @@ void main() {
 }`;
 
 const SKY_FRAG = /* glsl */ `
-uniform vec3 uTop;
-uniform vec3 uHorizon;
-uniform vec3 uBottom;
-uniform vec3 uSunColor;
-uniform vec3 uSunDir;
+${SKY_GLSL}
 uniform float uNight;
 uniform float uTime;
 uniform float uCloud;
-uniform vec3 uFog;
 varying vec3 vDir;
 float h3(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
 float h2(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
@@ -30,11 +27,11 @@ float fbm(vec2 p) { float s = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { s += a
 void main() {
   vec3 d = normalize(vDir);
   float y = d.y;
-  vec3 col = mix(uHorizon, uTop, pow(clamp(y, 0.0, 1.0), 0.55));
-  col = mix(col, uBottom, smoothstep(0.0, 0.25, -y));
-  float s = max(dot(d, uSunDir), 0.0);
-  float vis = smoothstep(-0.08, 0.05, uSunDir.y);
-  col += uSunColor * (pow(s, 900.0) * 30.0 + pow(s, 60.0) * 0.6 + pow(s, 6.0) * 0.12) * vis;
+  // the gradient and the sun's glow are shared with the haze (src/world/atmosphere.ts), so far things fade into this sky
+  vec3 col = skyGradient(d) + skySunGlow(d);
+  float s = max(dot(d, uSkySunDir), 0.0);
+  float vis = smoothstep(-0.08, 0.05, uSkySunDir.y);
+  col += uSkySun * pow(s, 900.0) * 30.0 * vis;
   // the moon
   vec3 moonDir = normalize(vec3(-0.4, 0.55, -0.73));
   float m = max(dot(d, moonDir), 0.0);
@@ -47,11 +44,11 @@ void main() {
   if (y > 0.0) {
     vec2 uv = d.xz / (y + 0.12) * 1.4 + vec2(uTime * 0.012, uTime * 0.004);
     float c = smoothstep(0.48, 0.82, fbm(uv)) * uCloud * smoothstep(0.0, 0.2, y);
-    vec3 cloudCol = mix(uHorizon * 1.05, uSunColor, 0.25 * vis) * (1.0 - 0.6 * uNight);
+    vec3 cloudCol = mix(uSkyHorizon * 1.05, uSkySun, 0.25 * vis) * (1.0 - 0.6 * uNight);
     col = mix(col, cloudCol, c * 0.85);
   }
   // melt into the fog at the horizon so the edge of the streamed city never shows
-  col = mix(col, uFog, 1.0 - smoothstep(-0.02, 0.16, y));
+  col = skyHorizonMelt(col, d);
   gl_FragColor = vec4(col, 1.0);
 }`;
 
@@ -93,6 +90,11 @@ void main() {
   gl_FragColor = vec4(uColor, a);
 }`;
 
+/** The mist that lies on the ground thins to about a third every this many metres up. */
+const MIST_HEIGHT = 45;
+/** How strongly haze towards the sun takes the sun's colour. */
+const SUN_SCATTER = 0.16;
+
 const tmp = new THREE.Color();
 const UP = new THREE.Vector3(0, 1, 0);
 const shadowRight = new THREE.Vector3();
@@ -109,8 +111,9 @@ export class Environment {
   readonly sky: THREE.Mesh;
   readonly sun = new THREE.DirectionalLight(0xffffff, 2);
   readonly hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
+  /** Where the edge of the streamed city starts and finishes dissolving into the sky (the haze itself is in src/world/atmosphere.ts). */
   readonly fog = new THREE.Fog(0xcccccc, 200, 1000);
-  readonly sunDir = new THREE.Vector3(0.3, 0.8, 0.4).normalize();
+  readonly sunDir = U.uSkySunDir.value;
   level: DreamLevel = LEVELS[0];
   time = LEVELS[0].time;
   night = 0;
@@ -121,16 +124,21 @@ export class Environment {
   private weatherFlakes: THREE.Points;
   private weatherUniforms;
   private skyU;
+  // the sky's colours are shared with every folded material, which fades into them with distance
   private colors = {
-    top: new THREE.Color(),
-    horizon: new THREE.Color(),
-    bottom: new THREE.Color(),
-    fog: new THREE.Color(),
-    sun: new THREE.Color(),
+    top: U.uSkyTop.value,
+    horizon: U.uSkyHorizon.value,
+    bottom: U.uSkyBottom.value,
+    fog: U.uSkyFog.value,
+    sun: U.uSkySun.value,
     hemiSky: new THREE.Color(),
     hemiGround: new THREE.Color(),
   };
-  private scalars = { sun: 2, hemi: 1, snow: 0, wet: 0, limbo: 0 };
+  private scalars = { sun: 2, hemi: 1, snow: 0, wet: 0, limbo: 0, haze: 0, mist: 0, exposure: 1 };
+  /** The level's exposure, cross-faded like the rest of its look. */
+  get exposure(): number {
+    return this.scalars.exposure;
+  }
   private pmrem: THREE.PMREMGenerator;
   private envScene = new THREE.Scene();
   private envTarget: THREE.WebGLRenderTarget | null = null;
@@ -142,15 +150,15 @@ export class Environment {
     private renderer: THREE.WebGLRenderer,
   ) {
     this.skyU = {
-      uTop: { value: this.colors.top },
-      uHorizon: { value: this.colors.horizon },
-      uBottom: { value: this.colors.bottom },
-      uSunColor: { value: this.colors.sun },
-      uSunDir: { value: this.sunDir },
+      uSkyTop: U.uSkyTop,
+      uSkyHorizon: U.uSkyHorizon,
+      uSkyBottom: U.uSkyBottom,
+      uSkyFog: U.uSkyFog,
+      uSkySun: U.uSkySun,
+      uSkySunDir: U.uSkySunDir,
       uNight: { value: 0 },
       uTime: U.uTime,
       uCloud: { value: 0.7 },
-      uFog: { value: this.colors.fog },
     };
     const skyMat = new THREE.ShaderMaterial({
       uniforms: this.skyU,
@@ -285,9 +293,21 @@ export class Environment {
     s.snow += (this.level.snow - s.snow) * k;
     s.wet += (this.level.wet - s.wet) * k;
     s.limbo += (this.level.limbo - s.limbo) * k;
+    s.haze += (this.level.haze - s.haze) * k;
+    s.mist += (this.level.mist - s.mist) * k;
+    s.exposure += (this.level.exposure - s.exposure) * k;
   }
 
-  update(dt: number, camera: THREE.PerspectiveCamera, focus: THREE.Vector3, shadowExtent: number): void {
+  /** The render targets the look owns (for the bench's memory estimate). */
+  targets(): THREE.RenderTarget[] {
+    const t: THREE.RenderTarget[] = [this.mirror.target];
+    if (this.sun.castShadow && this.sun.shadow.map) t.push(this.sun.shadow.map);
+    if (this.envTarget) t.push(this.envTarget);
+    return t;
+  }
+
+  /** `draw` is false on frames that will not be shown (the bench's fast-forward): the mirror is not rendered. */
+  update(dt: number, camera: THREE.PerspectiveCamera, focus: THREE.Vector3, shadowExtent: number, draw = true): void {
     const k = 1 - Math.exp(-dt * 2.2);
     this.blend(k);
     const c = this.colors;
@@ -332,6 +352,9 @@ export class Environment {
     this.skyU.uNight.value = this.night;
     this.skyU.uCloud.value = this.level.weather === 'none' ? 0.55 : 0.9;
 
+    // haze and mist are per kilometre in the themes, per metre in the shader
+    U.uHaze.value.set(this.scalars.haze * LOOK.haze * 0.001, this.scalars.mist * LOOK.haze * 0.001, 1 / MIST_HEIGHT, SUN_SCATTER);
+    U.uLook.value.set(LOOK.ao, LOOK.glow, 0, 0);
     U.uNight.value = this.night;
     U.uSnow.value = this.scalars.snow;
     U.uWet.value = this.scalars.wet;
@@ -345,7 +368,7 @@ export class Environment {
     // Wet streets mirror the city. From high above the street fills little of
     // the view at a steep angle, where water hardly reflects, so the mirror fades out.
     const mirror = this.scalars.wet * (1 - THREE.MathUtils.smoothstep(camera.position.y, 160, 260));
-    this.mirror.update(this.renderer, this.scene, camera, this.mirrorScale, mirror, [this.weatherRain, this.weatherFlakes]);
+    if (draw) this.mirror.update(this.renderer, this.scene, camera, this.mirrorScale, mirror, [this.weatherRain, this.weatherFlakes]);
 
     // Re-render the reflection environment while the look is changing.
     this.envClock += dt;

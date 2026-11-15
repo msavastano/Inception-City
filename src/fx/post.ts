@@ -49,7 +49,11 @@ void main() {
   col = mix(vec3(l), col, uSaturation);
   // teal shadows, warm highlights
   col *= mix(vec3(0.94, 1.0, 1.04), uTint, smoothstep(0.1, 0.8, l));
-  col = (col - 0.5) * uContrast + 0.5;
+  // contrast is an S-curve through mid-grey, so black stays black and white stays white
+  col = clamp(col, 0.0, 1.0);
+  vec3 up = pow(col, vec3(uContrast));
+  vec3 down = pow(1.0 - col, vec3(uContrast));
+  col = up / (up + down);
   col *= 1.0 - uVignette * smoothstep(0.08, 0.55, r2 * 1.6);
   // hurt: the edges of the picture run red
   float hurtEdge = uHurt * smoothstep(0.04, 0.5, r2 * 1.6);
@@ -60,6 +64,16 @@ void main() {
   gl_FragColor = vec4(col, 1.0);
 }`,
 };
+
+/** A rough size for a render target on the GPU: colour (with mips and MSAA samples) plus its depth buffer. */
+export function targetBytes(t: THREE.RenderTarget): number {
+  const px = t.width * t.height;
+  const bpp = t.texture.type === THREE.HalfFloatType ? 8 : t.texture.type === THREE.FloatType ? 16 : 4;
+  const colour = px * bpp * (t.texture.generateMipmaps ? 4 / 3 : 1);
+  const msaa = t.samples > 0 ? px * bpp * t.samples : 0;
+  const depth = t.depthBuffer ? px * 4 * Math.max(1, t.samples) : 0;
+  return colour + msaa + depth;
+}
 
 export class PostFX {
   readonly composer: EffectComposer;
@@ -91,6 +105,12 @@ export class PostFX {
   render(dt: number): void {
     if (this.enabled) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);
+  }
+
+  /** Every render target the chain owns (for the bench's memory estimate). */
+  targets(): THREE.RenderTarget[] {
+    const b = this.bloom;
+    return [this.composer.renderTarget1, this.composer.renderTarget2, b.renderTargetBright, ...b.renderTargetsHorizontal, ...b.renderTargetsVertical];
   }
 
   get u() {

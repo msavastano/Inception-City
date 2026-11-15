@@ -271,7 +271,7 @@ Candidate chunks are enumerated in fabric space around the camera's fabric focus
 
 Each kind of object (buildings, roofs and chimneys, fine ground, coarse ground, trees, lamps, the crowd, the monument) is a single instanced mesh. Each loaded chunk owns one fixed-size slab of instances in each mesh (224 buildings, 288 roof pieces, 128 trees, 128 lamps). Loading a chunk writes its slab and uploads just that range. Unloading zeroes it. Empty slots collapse to a point in the vertex shader before any fold maths runs.
 
-The result is about eleven draw calls for the whole city, whether it has two thousand buildings or twenty thousand. (At night the lamp halos add one more.)
+The result is about eleven draw calls for the whole city, whether it has two thousand buildings or twenty thousand. (At night the lamp halos add one more, and another in the Rain, where the wet street mirrors them.)
 
 ### 6.4 Level of detail
 

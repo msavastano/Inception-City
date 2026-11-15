@@ -15,7 +15,7 @@ import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PI = Math.PI;
@@ -226,10 +226,10 @@ async function compare(o) {
           [a, ra, 'before'],
           [b, rb, 'after'],
         ]
-          .map(([dir, r, name]) => `<div style="flex:1"><img src="${pathToFileURL(join(dir, r.file))}" style="width:100%;display:block"><div style="padding:4px 2px">${rb.view} · ${rb.quality} · ${name} · ${label(r)}</div></div>`)
+          .map(([dir, r, name]) => `<div style="flex:1"><img src="data:image/jpeg;base64,${readFileSync(join(dir, r.file)).toString('base64')}" style="width:100%;display:block"><div style="padding:4px 2px">${rb.view} · ${rb.quality} · ${name} · ${label(r)}</div></div>`)
           .join('')}
       </div></body>`);
-    await page.waitForLoadState('networkidle');
+    await page.waitForFunction(() => [...document.images].every((i) => i.complete && i.naturalWidth > 0));
     await page.locator('body > div').screenshot({ path: join(o.out, `${rb.view}-${rb.quality}.jpg`), type: 'jpeg', quality: 90 });
   }
   await browser.close();

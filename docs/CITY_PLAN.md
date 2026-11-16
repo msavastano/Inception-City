@@ -59,12 +59,12 @@ Boulevards carry plane trees. Every street has lamps on both sides at a fixed rh
 
 | Level | Name | Dream seconds per real second | Mood |
 | --- | --- | --- | --- |
-| 1 | The City | 20 | Clear Paris morning, warm stone, saturated grade |
+| 1 | The City | 20 | Clear Paris morning, warm stone, a little haze |
 | 2 | Rain | 400 | Dusk, wet streets and puddles that mirror the city, cold grade, autumn trees, restless crowd |
 | 3 | Snow | 8,000 | White silence, snow on every roof and pavement, a lower drone |
 | 4 | Limbo | ∞ | Washed-out colour, falling ash, a city crumbling into the sea |
 
-Each level has its own palette for day and night, weather, colour grade and ambient drone pitch. The time-of-day slider runs from noon to midnight on every level, and at night roughly a third of the windows light up. Up close each lit window opens onto a room (5.5).
+Each level has its own palette for day and night, weather, air (haze and ground mist), exposure, colour grade and ambient drone pitch. The time-of-day slider runs from noon to midnight on every level, and at night roughly a third of the windows light up. Up close each lit window opens onto a room (5.5).
 
 ---
 
@@ -199,7 +199,7 @@ flowchart LR
     Slabs --> VS[Vertex shaders<br/>fold + ripple + limbo]
     Folds -->|8 folds as uniforms| VS
     VS --> FS[Procedural shading<br/>facades, ground, creases]
-    FS --> Post[Bloom, grade, grain]
+    FS --> Post[Haze, bloom, tone curve, grade]
   end
   Walker -->|folded eye position| Camera
   Camera --> VS
@@ -241,6 +241,26 @@ When stability reaches zero the city comes apart around the dreamer (or around t
 
 `src/world/collapse.ts` holds the timeline and the shard planner; `tests/collapse.test.ts` pins the slow motion, the automatic kick and the healing, and where the shards may come from.
 
+### 5.8 Light and air
+
+A box city reads as flat unless three things are right: surfaces must darken where they meet, distance must be visible as air, and bright things must roll off to white without changing colour on the way. None of the three needs an extra pass over the city.
+
+- **Contact shadows, computed.** Ambient occlusion is normally sampled from a depth buffer. Here the painters already know where everything is, because the generator's layout is arithmetic: a perimeter block's wall stands on its building line, boulevard trees stand in a row at fixed distances into each block, lamps stand a metre inside the building line every 32 m. So the ground painter darkens the sky's light beside walls (half the sky is hidden at the foot of an 18 m wall, less further out), in courtyards, under tree crowns, round lamp posts and under the monument; the facade painter darkens walls towards the street, hardest over their last metre and a half, shades the edges of each window opening and the glass under a shop awning; and a tree's crown is darker underneath. Only the hemisphere and sky-reflection light are dimmed, never the sun, plus a little painted grime in the corner itself. It costs a few multiplies per pixel and runs on every tier. `tests/look.test.ts` pins the shaders' idea of where trees and lamps stand to the generator's.
+- **Haze.** Three's fog is replaced in every folded material (`src/world/atmosphere.ts`). Things fade with distance, exponentially, towards the colour of the sky *in the direction you are looking*, warmed towards the sun, so a district hanging overhead goes blue like a far hill while a street running to the horizon pales the way the horizon does. Each level sets how thick the air is and how much extra mist lies on the ground (it thins with height, so the towers stand out of it). The sky dome and the haze share one GLSL sky function, so they cannot drift apart.
+- **The edge of the city.** Over the last third of the view distance the city does not fade to a colour at all: its alpha falls to zero and what shows through is the sky that was drawn first, with its clouds, stars and moon. That hides the edge of the streamed city whichever way it is seen, including from underneath on the Paris fold and the Scroll, where a fog colour would show as a grey shape against the blue. The materials stay in the opaque pass (front to back, writing depth); only that last stretch blends.
+- **Night.** The lamps light the facades beside them (a pool of light per lamp, computed from the same lattice), pale paving throws back more lamp light than asphalt, and every lantern has a halo: one instanced quad per lamp, reading the lamps' own instance buffers, drawn only at night and wider in rain and mist (`src/fx/halos.ts`).
+- **Tone.** Scene light goes through the Khronos PBR Neutral curve, which keeps colours as painted until they are nearly white, then a small display grade per level (exposure, split-tone tint, saturation, and contrast as an S-curve that leaves black and white where they are). AgX (softer, film-like) and the old ACES curve are a link parameter away for comparison.
+
+Every dial is in `src/world/look.ts` (global) and `src/world/themes.ts` (per level), and the global ones can be set from the link: `#tone=neutral|agx|aces`, and `#ao=`, `#haze=`, `#glow=`, `#exposure=`, `#contrast=`, `#saturation=` as multipliers. `#tone=aces&ao=0&haze=0&glow=0` is close to the look before this pass.
+
+A look cannot be reviewed from a diff, so `npm run bench` (after `npm run build`) renders the same eight seeded views at each quality tier and prints draw calls, triangles and render-target memory for each; `--compare` lays two runs side by side. It needs Playwright, which is not a dependency of the game.
+
+Before and after, from the bench (Medium, the same seed and view):
+
+![A street at midnight, before and after](images/light-and-air/night-medium.jpg)
+
+![The Paris Fold, before and after](images/light-and-air/paris-medium.jpg)
+
 ## 6. Scaling
 
 The goal is a city that is effectively infinite, foldable in real time, and still smooth on a phone. Each of the decisions below exists to keep one cost constant as the city grows.
@@ -257,7 +277,7 @@ Candidate chunks are enumerated in fabric space around the camera's fabric focus
 
 Each kind of object (buildings, roofs and chimneys, fine ground, coarse ground, trees, lamps, the crowd, the monument) is a single instanced mesh. Each loaded chunk owns one fixed-size slab of instances in each mesh (224 buildings, 288 roof pieces, 128 trees, 128 lamps). Loading a chunk writes its slab and uploads just that range. Unloading zeroes it. Empty slots collapse to a point in the vertex shader before any fold maths runs.
 
-The result is about eleven draw calls for the whole city, whether it has two thousand buildings or twenty thousand.
+The result is about eleven draw calls for the whole city, whether it has two thousand buildings or twenty thousand. (At night the lamp halos add one more, and another in the Rain, where the wet street mirrors them.)
 
 ### 6.4 Level of detail
 
@@ -269,7 +289,7 @@ The result is about eleven draw calls for the whole city, whether it has two tho
 
 ### 6.5 No textures
 
-All surface detail comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, the rooms behind the windows, snow cover, puddles and raindrop ripples, crosswalks, park paths, lamp pools, glowing crease lines and the glowing lattice on the underside of a fold. The build ships no image assets at all. The whole app, including the 3D engine, is about 720 kB of JavaScript (about 190 kB gzipped).
+All surface detail comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, the rooms behind the windows, snow cover, puddles and raindrop ripples, crosswalks, park paths, lamp pools, contact shadows (5.8), glowing crease lines and the glowing lattice on the underside of a fold. The build ships no image assets at all. The whole app, including the 3D engine, is about 720 kB of JavaScript (about 190 kB gzipped).
 
 ### 6.6 Bounded fold cost
 
@@ -317,8 +337,11 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 ### Milestone 1.4: Heist mode (done)
 - A game in the folded city: sleep machines down, found kicks up, a target to plant an idea in, a totem, and a topside clock that slows with depth (4.5)
 
-### Milestone 1.5: behind the dreamer (this release)
+### Milestone 1.5: behind the dreamer (done)
 - A third-person camera in Dream Walk that shows the dreamer's own body, walking, running and jumping, and keeps out of buildings, curls and the hallway's walls (4.6)
+
+### Milestone 1.6: light and air (this release)
+- Computed contact shadows, haze that takes the sky's colour and hides the city's edge, lamp light and halos at night, a neutral tone curve with every dial in one place, and a screenshot bench for judging changes like these (5.8)
 
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
@@ -349,12 +372,15 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/city/pool.ts` | The slab allocator for instanced attributes |
 | `src/city/streamer.ts` | World-space streaming, LOD, collision and raise-brush edits |
 | `src/world/` | Sky, sun and weather, dream levels, the projections crowd |
+| `src/world/atmosphere.ts` | The sky's colour function and the haze that replaces fog in every folded material |
+| `src/world/look.ts` | The dials for the lighting pass (tone curve, ambient occlusion, haze, glow) and their link parameters |
 | `src/world/hallway.ts` | The rotating hallway: geometry, shader painter and the rider's physics |
 | `src/world/collapse.ts` | The café explosion: the shard planner, the slow-motion timeline and the automatic kick |
 | `src/world/dreamer.ts` | The dreamer's body for the third-person view, and its procedural walk |
 | `src/modes/` | Architect controls, Dream Walk controls, presets, the ride fold (`ride.ts`), the third-person camera boom (`chase.ts`) |
 | `src/game/heist.ts` | Heist mode's rules: the topside clock, health, Limbo, placement and the kicks |
 | `src/game/marks.ts` | Heist mode's things in the city: sleep machine, gramophone, totem, target and their beams |
-| `src/fx/` | GPU picking, procedural audio, post-processing, the wet-street mirror (`reflection.ts`) |
+| `src/fx/` | GPU picking, procedural audio, post-processing, the wet-street mirror (`reflection.ts`), lamp halos (`halos.ts`) |
+| `scripts/bench.mjs` | The screenshot bench: eight seeded views per quality tier, with draw calls, triangles and memory |
 | `src/ui/` | Styles and the HUD totem |
-| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror, café explosion, Heist mode and third-person camera tests |
+| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror, café explosion, Heist mode, third-person camera and lighting-layout tests |

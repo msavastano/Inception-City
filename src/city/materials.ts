@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { MAX_FOLDS } from '../core/config';
+import { blendIntoSky, patchHaze } from '../world/atmosphere';
 import {
+  BUILDING_FRAG_AO,
   BUILDING_FRAG_COLOR,
   BUILDING_FRAG_EMISSIVE,
   BUILDING_FRAG_HEAD,
@@ -14,6 +16,7 @@ import {
   GROUND_FRAG_WET,
   GROUND_VERT_HEAD,
   PICK_FRAG,
+  PROP_FRAG_AO,
   PROP_FRAG_COLOR,
   PROP_FRAG_EMISSIVE,
   PROP_FRAG_HEAD,
@@ -56,6 +59,16 @@ export const U = {
   // The café explosion (src/world/collapse.ts).
   uBlast: { value: new THREE.Vector4(0, 0, 0, 0) },
   uShatter: { value: new THREE.Vector4(0, 0, 9.8, 0) },
+  // The lighting pass (src/world/look.ts): ambient occlusion strength, night glow strength, unused, unused.
+  uLook: { value: new THREE.Vector4(1, 1, 0, 0) },
+  // The air (src/world/atmosphere.ts). The sky's colours are written by the Environment.
+  uHaze: { value: new THREE.Vector4(0.001, 0.001, 1 / 40, 0.1) },
+  uSkyTop: { value: new THREE.Color() },
+  uSkyHorizon: { value: new THREE.Color() },
+  uSkyBottom: { value: new THREE.Color() },
+  uSkyFog: { value: new THREE.Color() },
+  uSkySun: { value: new THREE.Color() },
+  uSkySunDir: { value: new THREE.Vector3(0.3, 0.8, 0.4).normalize() },
 };
 
 type Kind = 'building' | 'ground' | 'prop' | 'shard';
@@ -70,6 +83,7 @@ const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [s
       ['#include <roughnessmap_fragment>', BUILDING_FRAG_ROUGH],
       ['#include <metalnessmap_fragment>', BUILDING_FRAG_METAL],
       ['#include <emissivemap_fragment>', BUILDING_FRAG_EMISSIVE],
+      ['#include <aomap_fragment>', BUILDING_FRAG_AO],
     ],
   },
   ground: {
@@ -92,6 +106,7 @@ const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [s
       ['#include <roughnessmap_fragment>', PROP_FRAG_ROUGH],
       ['#include <metalnessmap_fragment>', PROP_FRAG_METAL],
       ['#include <emissivemap_fragment>', PROP_FRAG_EMISSIVE],
+      ['#include <aomap_fragment>', PROP_FRAG_AO],
     ],
   },
   shard: {
@@ -129,8 +144,10 @@ export function foldedMaterial(kind: Kind, params: THREE.MeshStandardMaterialPar
     f = f.replace(must(f, '#include <common>'), `#include <common>\n${spec.frag}`);
     for (const [find, repl] of spec.replace) f = f.replace(must(f, find), repl);
     shader.fragmentShader = f;
+    patchHaze(shader);
   };
   mat.customProgramCacheKey = () => `inception-${kind}`;
+  blendIntoSky(mat);
   return mat;
 }
 

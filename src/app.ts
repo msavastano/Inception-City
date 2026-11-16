@@ -5,8 +5,9 @@ import { totemGeometry } from './city/geometry';
 import { U } from './city/materials';
 import { CityStreamer } from './city/streamer';
 import { DreamAudio } from './fx/audio';
+import { LampHalos } from './fx/halos';
 import { Picker } from './fx/picking';
-import { PostFX } from './fx/post';
+import { PostFX, targetBytes } from './fx/post';
 import { HeistEvent, HeistRun, Item, KickResult, LIMBO, LUCIDITY_WITH_TOTEM, LUCIDITY_WITHOUT, Outcome, SCAPES, SPAWN, Spot, TARGET_DEPTH, levelSeed } from './game/heist';
 import { HeistMarks } from './game/marks';
 import { ArchitectMode, Tool } from './modes/architect';
@@ -17,6 +18,7 @@ import { Totem } from './ui/totem';
 import { Collapse, planShards } from './world/collapse';
 import { Environment } from './world/environment';
 import { HALL_LENGTH, Hallway } from './world/hallway';
+import { LOOK, TONE_CURVES, readLook } from './world/look';
 import { Projections } from './world/projections';
 import { LEVELS } from './world/themes';
 
@@ -86,6 +88,7 @@ export class App implements DreamContext {
   readonly audio = new DreamAudio();
   readonly env: Environment;
   readonly post: PostFX;
+  readonly halos: LampHalos;
   readonly architect: ArchitectMode;
   readonly walk: DreamWalk;
   readonly crowd: Projections;
@@ -145,8 +148,9 @@ export class App implements DreamContext {
     if (mobile) document.body.classList.add('touch');
 
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, powerPreference: 'high-performance' });
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.92;
+    readLook(params);
+    this.renderer.toneMapping = TONE_CURVES[LOOK.tone].mapping;
+    this.renderer.toneMappingExposure = TONE_CURVES[LOOK.tone].exposure;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.info.autoReset = false;
@@ -154,6 +158,8 @@ export class App implements DreamContext {
     this.env = new Environment(this.scene, this.renderer);
     this.streamer = new CityStreamer(this.seed, MAX_CHUNKS);
     this.scene.add(this.streamer.group);
+    this.halos = new LampHalos(this.streamer.lamps);
+    this.scene.add(this.halos.mesh);
     this.picker = new Picker(this.renderer, this.streamer.pickGroup);
 
     // The folds' uniform arrays are shared with every folded material.
@@ -373,6 +379,30 @@ export class App implements DreamContext {
       }
       this.architect.finishFlight();
     }
+  }
+
+  /**
+   * Test hook: take over the frame loop and advance the dream by hand in fixed steps (scripts/bench.mjs).
+   * Only the last frame is drawn, so a software renderer can run hundreds of steps of streaming and physics.
+   */
+  step(frames = 1, dt = 0.05, draw = true): void {
+    this.renderer.setAnimationLoop(null);
+    for (let i = 0; i < frames; i++) this.frame(dt, draw && i === frames - 1);
+  }
+
+  /** Test hook: what the last drawn frame cost. Texture memory is an estimate from the render targets' sizes. */
+  stats(): { quality: string; calls: number; triangles: number; textures: number; geometries: number; programs: number; targetMB: number } {
+    const info = this.renderer.info;
+    const targets = [...this.post.targets(), ...this.env.targets()];
+    return {
+      quality: this.quality,
+      calls: info.render.calls,
+      triangles: info.render.triangles,
+      textures: info.memory.textures,
+      geometries: info.memory.geometries,
+      programs: info.programs?.length ?? 0,
+      targetMB: Math.round((targets.reduce((sum, t) => sum + targetBytes(t), 0) / 1048576) * 10) / 10,
+    };
   }
 
   focus(): { x: number; z: number } {
@@ -1031,9 +1061,10 @@ export class App implements DreamContext {
 
   // ---------------------------------------------------------------- frame
 
-  private frame(): void {
+  private frame(step?: number, draw = true): void {
     this.timer.update();
-    const dt = Math.min(this.timer.getDelta(), 0.05);
+    const dt = step ?? Math.min(this.timer.getDelta(), 0.05);
+    this.renderer.info.reset();
     // While the dream collapses it runs in slow motion (wdt); the dreamer and the cameras keep real time.
     if (this.collapse.update(dt)) {
       if (this.run) this.heistCrash();
@@ -1093,9 +1124,11 @@ export class App implements DreamContext {
     const alt = this.mode === 'architect' ? Math.max(0, this.camera.position.y) : 0;
     const weather = level.weather === 'rain' || level.weather === 'snow';
     const view = (q.view + alt * 0.6) * (weather ? 0.8 : 1);
-    this.env.fog.near = view * (weather ? 0.12 : 0.45);
-    this.env.fog.far = view;
+    // the haze thickens with distance on its own; this is only the last stretch, where the streamed city's edge dissolves
+    this.env.fog.near = view * 0.66;
+    this.env.fog.far = view * 0.97;
     this.streamer.update(this.camera.position, focus.x, focus.z, this.folds.active, this.folds.folds, view, q.props, this.time);
+    this.halos.update(this.env.night * LOOK.glow, (level.haze + level.mist) * LOOK.haze, this.env.fog.near, this.env.fog.far);
 
     // Dream stability.
     const floor = Math.min(0.45, this.folds.load * 0.09) + level.limbo * 0.12;
@@ -1123,7 +1156,7 @@ export class App implements DreamContext {
     const fw = new THREE.Vector3();
     if (this.mode === 'walk') fw.copy(this.camera.position);
     else fw.copy(this.architect.controls.target);
-    this.env.update(dt, this.camera, fw, q.extent);
+    this.env.update(dt, this.camera, fw, q.extent, draw);
     const turning = this.hallway.rider ? Math.abs(this.hallway.spin) * 0.45 : 0;
     // slow motion drags the drone down with it
     this.audio.update(this.folds.motion + turning, level.drone * (0.6 + 0.4 * slow), this.instability);
@@ -1134,9 +1167,11 @@ export class App implements DreamContext {
     g.uTime.value = this.time;
     g.uAberration.value = Math.min(0.22, this.instability * 0.05 + this.folds.motion * 0.04);
     g.uFlash.value = this.flash;
+    const tone = TONE_CURVES[LOOK.tone];
+    this.renderer.toneMappingExposure = tone.exposure * this.env.exposure * LOOK.exposure;
     g.uTint.value.lerp(new THREE.Vector3(...level.tint), dt * 2);
-    g.uSaturation.value += (level.saturation * (0.7 + 0.3 * slow) - g.uSaturation.value) * dt * 2;
-    g.uContrast.value += (level.contrast - g.uContrast.value) * dt * 2;
+    g.uSaturation.value += (level.saturation * tone.saturation * LOOK.saturation * (0.7 + 0.3 * slow) - g.uSaturation.value) * dt * 2;
+    g.uContrast.value += (level.contrast * tone.contrast * LOOK.contrast - g.uContrast.value) * dt * 2;
     // At night hundreds of lit windows would wash the frame out, so only the brightest ones bloom.
     this.post.bloom.strength = 0.32 - this.env.night * 0.08;
     this.post.bloom.threshold = 0.9 + this.env.night * 0.5;
@@ -1144,9 +1179,8 @@ export class App implements DreamContext {
     this.realElapsed += dt;
     this.dreamElapsed += wdt * level.dilation;
     this.updateHud(dt);
-    this.renderer.info.reset();
-    this.post.render(dt);
-    this.adaptQuality(dt);
+    if (draw) this.post.render(dt);
+    if (step === undefined) this.adaptQuality(dt);
   }
 
   private updateHud(dt: number): void {

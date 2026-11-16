@@ -82,16 +82,19 @@ On touch screens: in architect mode one finger folds or paints (or orbits with t
 
 `#s=` seed, `#l=` level (1 to 4), `#t=` time of day (0 is noon, 1 is midnight), `#f=` folds, and `#q=` quality (`low`, `medium`, `high` or `ultra`). The Share button writes all of them for you. `#job=` is a Heist mode job (its seed), written by "Share this job".
 
+The look has its own dials, for trying things out: `#tone=` picks the tone curve (`neutral`, `agx` or `aces`), and `#ao=`, `#haze=`, `#glow=`, `#exposure=`, `#contrast=` and `#saturation=` scale the contact shadows, the haze, the lamps' glow at night and the grade (1 is the default, 0 is off). For example `#tone=agx&haze=1.5` is a softer, hazier, more film-like city. The defaults live in [`src/world/look.ts`](src/world/look.ts) and, per dream level, in [`src/world/themes.ts`](src/world/themes.ts).
+
 ## How it works
 
 The short version: **everything is simulated on the flat sheet, and folding happens only in the vertex shader.**
 
 - **Fabric space and world space.** Generation, collision, the crowd, the dreamer's footsteps and streaming all live on the unfolded sheet. A fold is a rigid transform that depends only on how far a point lies past the hinge, so it is continuous, it preserves distances along the street (which is why you can walk up a curl with no special code), and nested folds compose like paper. Crossing folds cut the sheet like the corners of a paper box. The maths is in [`src/core/fold.ts`](src/core/fold.ts), mirrored in GLSL in [`src/city/shaders.ts`](src/city/shaders.ts), and pinned by [`tests/fold.test.ts`](tests/fold.test.ts).
-- **About eleven draw calls for the whole city.** Each kind of object is one instanced mesh, and each streamed 256 m chunk owns a fixed slab of instances, so loading a chunk is one partial buffer upload and the draw-call count never grows.
+- **About eleven draw calls for the whole city.** Each kind of object is one instanced mesh, and each streamed 256 m chunk owns a fixed slab of instances, so loading a chunk is one partial buffer upload and the draw-call count never grows. (At night the lamp halos add one, and one more in the Rain, where the wet street mirrors them.)
 - **Streaming after folding.** Chunks are chosen by their distance *after* folding, so the districts hanging overhead are loaded even though they are far away on the sheet.
 - **No textures.** Facades, roofs, streets, parks, snow, puddles, crease lines and the glowing underside of a fold are all painted procedurally in shaders.
 - **Rooms behind the windows.** Each window is a hole into a room traced in the facade shader (interior mapping): walls, floor, a ceiling lamp, curtains and furniture shift with parallax as you walk past, with no extra geometry. Far away a window fades back to a flat pane.
 - **Wet streets.** In the Rain the street is a mirror. The city is drawn a second time from below the street at reduced resolution, and the ground looks it up: sharp in puddles that ripple with raindrops, smeared into long streaks on wet asphalt. On Low quality the street lamps' reflections are traced analytically instead. See [`src/fx/reflection.ts`](src/fx/reflection.ts).
+- **Light and air.** Contact shadows are computed, not sampled: the painters know where the walls, trees and lamp posts stand, so they darken the sky's light beside them for a few multiplies per pixel on every quality tier. Distance shows as haze that takes the colour of the sky in the direction you look, so the city hanging overhead goes blue, and at the edge of the streamed city things dissolve into the real sky instead of a fog colour. At night the lamps light the facades and wear halos. The tone curve is Khronos PBR Neutral, with a small grade per level. See [`src/world/atmosphere.ts`](src/world/atmosphere.ts) and section 5.8 of the city plan.
 - **GPU picking.** Clicking on a folded city renders a single pixel of fabric coordinates under the cursor, so a fold can start on a wall or a ceiling.
 - **The café explosion.** At zero stability a blast wave runs through the building shader, cracking each wall into cells and opening some of them onto the rooms behind, while a few thousand instanced shards leave the same walls at the same moments. The dream's clock then runs at about a sixth of real time, but the dreamer keeps real time. See [`src/world/collapse.ts`](src/world/collapse.ts).
 - **One exception to the rule.** Inside the rotating hallway, gravity points at the real ground. The dreamer is simulated in the corridor's own spinning frame, with friction that holds until the floor tilts past about 31°, and the camera's up eases toward whichever wall is underfoot. See [`src/world/hallway.ts`](src/world/hallway.ts).
@@ -104,10 +107,13 @@ The [city plan](docs/CITY_PLAN.md) covers the districts, the rules of the dream,
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm test             # fold algebra, generator, hallway, mirror and café explosion tests
+npm test             # fold algebra, generator, hallway, mirror, café explosion and lighting-layout tests
 npm run build        # static site in dist/
 npm run build:single # one self-contained HTML file in dist-single/
+npm run bench        # screenshots of eight fixed views per quality tier, in bench/ (needs Playwright)
 ```
+
+`npm run bench` is for judging changes to the look: run it on a build before and after, then `node scripts/bench.mjs --compare before after --out compare` puts the two sets side by side. It also prints draw calls, triangles and render-target memory for each view. Playwright is not a dependency of the game; install it with `npm i -D playwright && npx playwright install chromium` when you want the bench.
 
 Built with TypeScript, [Three.js](https://threejs.org) and [Vite](https://vite.dev). Every push to `main` is tested, built and published to GitHub Pages by [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
 
@@ -117,12 +123,13 @@ Built with TypeScript, [Three.js](https://threejs.org) and [Vite](https://vite.d
 src/
   core/    fold algebra, grid constants, seeded noise
   city/    chunk generator, shaders, materials, slab allocator, streamer
-  world/   sky and weather, dream levels, the projections crowd, the rotating hallway, the café explosion
+  world/   sky, haze and weather, dream levels and the look's dials, the projections crowd, the rotating hallway, the café explosion
   modes/   architect, dream walk, riding the fold, dreamscape presets
   game/    Heist mode: the job's rules, and its sleep machines, kicks, totem and target
-  fx/      GPU picking, procedural audio, post-processing, the wet-street mirror
+  fx/      GPU picking, procedural audio, post-processing, the wet-street mirror, lamp halos
   ui/      styles and the HUD totem
-tests/     fold, generator, hallway, ride, mirror, café explosion and Heist mode tests
+tests/     fold, generator, hallway, ride, mirror, café explosion, Heist mode and lighting-layout tests
+scripts/   the single-file build and the screenshot bench
 docs/      the city plan and screenshots
 ```
 

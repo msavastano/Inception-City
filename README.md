@@ -117,7 +117,7 @@ npm run bench        # screenshots of eight fixed views per quality tier, in ben
 npm run listen       # a recording of the game's sound, scene by scene, in listen/ (needs Playwright)
 ```
 
-`npm run bench` is for judging changes to the look: run it on a build before and after, then `node scripts/bench.mjs --compare before after --out compare` puts the two sets side by side. It also prints draw calls, triangles and render-target memory for each view. Playwright is not a dependency of the game; install it with `npm i -D playwright && npx playwright install chromium` when you want the bench.
+`npm run bench` is for judging changes to the look: run it on a build before and after, then `node scripts/bench.mjs --compare before after --out compare` puts the two sets side by side. It also prints draw calls, triangles and render-target memory for each view. On a machine with a graphics card, `--gpu --time` (with `--channel msedge` or `chrome` to use an installed browser) also times each view's frame. Playwright is not a dependency of the game; install it with `npm i -D playwright && npx playwright install chromium` when you want the bench.
 
 `npm run listen` is the same idea for the ears: after `npm run build` it plays a headless copy of the game through nine scenes (a street by day and by night, the Circus, a crowd, the Rain, the Snow, Limbo, the hallway, the Architect's height), records what comes out of the speakers into `listen/reel.webm`, cuts each scene out as an `.mp3` if `ffmpeg` is installed, and prints each scene's level and which beds were playing. `--scenes rain,hall` picks scenes and `--no-drone` leaves the drone out, to hear the recordings alone.
 

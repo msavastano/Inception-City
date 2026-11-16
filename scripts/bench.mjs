@@ -10,7 +10,14 @@
 // Playwright (npm i -D playwright && npx playwright install chromium); it is not a
 // dependency of the game. Without a GPU, Chromium falls back to a software renderer:
 // the pictures are the same, the frame times are not, so the bench reports draw calls,
-// triangles and memory, never milliseconds.
+// triangles and memory, and milliseconds only when asked:
+//
+//   node scripts/bench.mjs --gpu --time --channel msedge       on a machine with a graphics card
+//
+// --gpu asks for the real graphics card instead of the software renderer, --channel uses an
+// installed browser (msedge, chrome) instead of Playwright's own, and --time draws each view
+// forty more times and reports the average frame in milliseconds. Every row records which
+// renderer drew it, so a time from the software renderer cannot be mistaken for a real one.
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -98,6 +105,9 @@ function args() {
     size: get('size', '1280x720').split('x').map(Number),
     phone: a.includes('--phone'),
     hash: get('hash', ''),
+    time: a.includes('--time'),
+    gpu: a.includes('--gpu'),
+    channel: get('channel', ''),
     compare: compare >= 0 ? [resolve(a[compare + 1]), resolve(a[compare + 2])] : null,
   };
 }
@@ -128,7 +138,7 @@ function serve(dir) {
 }
 
 /** Runs in the page: set the view up, fast-forward until the city has streamed in, draw one frame. */
-function shoot(v) {
+function shoot([v, time]) {
   const d = window.dream;
   d.audio.start = () => {};
   d.start(v.at ? 'walk' : 'architect');
@@ -181,7 +191,23 @@ function shoot(v) {
     d.step(30);
   }
   // read the canvas back in the same task as the draw, before the browser clears it
-  return { stats: d.stats(), image: document.getElementById('scene').toDataURL('image/jpeg', 0.92) };
+  const out = { stats: d.stats(), image: document.getElementById('scene').toDataURL('image/jpeg', 0.92) };
+  const gl = d.renderer.getContext();
+  const info = gl.getExtension('WEBGL_debug_renderer_info');
+  out.stats.renderer = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : 'unknown';
+  if (time) {
+    // the same frame again and again, with the clock stopped; reading a pixel back makes the browser wait for the GPU to finish
+    const px = new Uint8Array(4);
+    const draw = () => {
+      d.step(1, 0, true);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    };
+    for (let i = 0; i < 5; i++) draw();
+    const t0 = performance.now();
+    for (let i = 0; i < 40; i++) draw();
+    out.stats.ms = Math.round(((performance.now() - t0) / 40) * 100) / 100;
+  }
+  return out;
 }
 
 async function run(o) {
@@ -194,7 +220,11 @@ async function run(o) {
   const { chromium } = loadPlaywright();
   const server = await serve(o.dist);
   const base = `http://127.0.0.1:${server.address().port}/`;
-  const launch = () => chromium.launch({ args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl'] });
+  const launch = () =>
+    chromium.launch({
+      ...(o.channel ? { channel: o.channel } : {}),
+      args: o.gpu ? ['--ignore-gpu-blocklist', '--enable-gpu', '--enable-webgl'] : ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl'],
+    });
   let browser = await launch();
   mkdirSync(o.out, { recursive: true });
   const rows = [];
@@ -223,7 +253,7 @@ async function run(o) {
       const hash = `s=${SEED}&q=${tier}&l=${v.level}${v.time !== undefined ? `&t=${v.time}` : ''}${o.hash ? `&${o.hash}` : ''}`;
       await page.goto(`${base}#${hash}`);
       await page.waitForFunction(() => window.dream, null, { timeout: 120000 });
-      return await page.evaluate(shoot, v);
+      return await page.evaluate(shoot, [v, o.time]);
     } finally {
       await context.close().catch(() => {});
     }
@@ -248,13 +278,14 @@ async function run(o) {
       save(); // after every shot, so a run that is cut short keeps what it has
       console.log(
         `${v.id.padEnd(11)} ${tier.padEnd(7)} ${String(stats.calls).padStart(3)} calls  ${String(Math.round(stats.triangles / 1000)).padStart(5)}k tris  ` +
-          `${String(stats.textures).padStart(3)} textures  ${String(stats.targetMB).padStart(6)} MB targets  ${String(stats.programs).padStart(2)} programs  (${((Date.now() - t0) / 1000).toFixed(0)} s)`,
+          `${String(stats.textures).padStart(3)} textures  ${String(stats.targetMB).padStart(6)} MB targets  ${String(stats.programs).padStart(2)} programs  ` +
+          `${stats.ms !== undefined ? `${stats.ms.toFixed(2).padStart(7)} ms a frame  ` : ''}(${((Date.now() - t0) / 1000).toFixed(0)} s)`,
       );
     }
   }
   await browser.close();
   server.close();
-  console.log(`\n${rows.length} shots in ${o.out}`);
+  console.log(`\n${rows.length} shots in ${o.out}, drawn by ${rows[0]?.renderer ?? 'nothing'}`);
 }
 
 /** Side-by-side sheets from two runs, one image per view and tier, the first run on the left. */
@@ -263,13 +294,13 @@ async function compare(o) {
   const ja = JSON.parse(readFileSync(join(a, 'bench.json'), 'utf8'));
   const jb = JSON.parse(readFileSync(join(b, 'bench.json'), 'utf8'));
   const { chromium } = loadPlaywright();
-  const browser = await chromium.launch();
+  const browser = await chromium.launch(o.channel ? { channel: o.channel } : {});
   const page = await browser.newPage({ viewport: { width: 1600, height: 500 }, deviceScaleFactor: 1 });
   mkdirSync(o.out, { recursive: true });
   for (const rb of jb.rows) {
     const ra = ja.rows.find((r) => r.view === rb.view && r.quality === rb.quality);
     if (!ra) continue;
-    const label = (r) => `${r.calls} calls · ${Math.round(r.triangles / 1000)}k triangles · ${r.targetMB} MB targets`;
+    const label = (r) => `${r.calls} calls · ${Math.round(r.triangles / 1000)}k triangles · ${r.targetMB} MB targets${r.ms !== undefined ? ` · ${r.ms} ms a frame` : ''}`;
     await page.setContent(`<body style="margin:0;background:#111;color:#ddd;font:14px system-ui">
       <div style="display:flex;gap:6px;padding:6px">
         ${[

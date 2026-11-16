@@ -30,6 +30,9 @@ const JOG = clip('jog');
 const FADE = 0.3;
 /** People this close to the focus cast shadows (metres). */
 const SHADOW_RANGE = 110;
+/** The dreamer hears the footsteps of people this close (metres), and of no more than this many at once. */
+const EARSHOT = 16;
+const HEARD = 8;
 
 interface Agent {
   x: number;
@@ -96,6 +99,11 @@ export class Projections {
   watching = 0;
   /** How many are hunting the dreamer right now. */
   hunting = 0;
+  /**
+   * Feet that came down near the dreamer since this was last emptied: fabric x, z pairs.
+   * Whoever plays them empties it.
+   */
+  readonly footfalls: number[] = [];
   /** Someone reached the dreamer (from fabric x, z). They lose track of you for a moment. */
   onCaught: ((x: number, z: number) => void) | null = null;
   private opts: Required<CrowdOptions>;
@@ -233,6 +241,7 @@ export class Projections {
       const toX = tx - a.x;
       const toZ = tz - a.z;
       const dist = Math.hypot(toX, toZ);
+      const stride = Math.floor(a.phase * 2);
       const prox = 1 - THREE.MathUtils.smoothstep(dist, o.near, o.far);
       const keen = THREE.MathUtils.lerp(0.6 + 0.4 * a.keen, 1, o.zeal);
       const target = Math.min(1, instability * 1.25 + alert) * prox * keen;
@@ -300,6 +309,10 @@ export class Projections {
         }
       }
       if (a.fade > 0) a.fade = Math.max(0, a.fade - dt / FADE);
+      // every clip that walks starts as the left foot lands, so a foot comes down twice a cycle
+      if (dreamer && dist < EARSHOT && a.clip !== 'idle' && a.clip !== 'talk' && Math.floor(a.phase * 2) !== stride && this.footfalls.length < HEARD * 2) {
+        this.footfalls.push(a.x, a.z);
+      }
 
       // someone who has begun to notice turns their head to watch the dreamer go by (not right round: nobody's neck does that)
       const off = wrap(bearing - a.yaw);
@@ -326,6 +339,16 @@ export class Projections {
     this.hunting = hunting;
     this.people.shadows = near;
     this.people.commit();
+  }
+
+  /** Where the people nearest the focus are: fills `out` with x, z pairs and returns how many. */
+  nearest(out: Float32Array): number {
+    const n = Math.min(this.agents.length, out.length >> 1);
+    for (let i = 0; i < n; i++) {
+      out[i * 2] = this.agents[i].x;
+      out[i * 2 + 1] = this.agents[i].z;
+    }
+    return n;
   }
 
   /** Everyone forgets (after a kick). */

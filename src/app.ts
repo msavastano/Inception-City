@@ -4,7 +4,9 @@ import { Fold, FoldStack, foldPoint } from './core/fold';
 import { totemGeometry } from './city/geometry';
 import { U } from './city/materials';
 import { CityStreamer } from './city/streamer';
-import { DreamAudio } from './fx/audio';
+import { DreamAudio, Heard } from './fx/audio';
+import { CROWD_VOICES, CrowdVoice, crowdVoices, Footfall, footing, Scene, toEar } from './fx/soundscape';
+import { greenAt, groundAt, shelterAt } from './city/surface';
 import { LampHalos } from './fx/halos';
 import { Picker } from './fx/picking';
 import { PostFX, targetBytes } from './fx/post';
@@ -131,6 +133,11 @@ export class App implements DreamContext {
   private toastTimer = 0;
   private pendingPreset: Preset | null = null;
   private timer = new THREE.Timer();
+  // what the crowd sounds like from here (see crowdSound)
+  private nearPeople = new Float32Array(160);
+  private crowdGroups: CrowdVoice[] = [];
+  private crowdHeard: Heard[] = Array.from({ length: CROWD_VOICES }, () => ({ x: 0, y: 0, z: 0, gain: 0 }));
+  private ear = { x: 0, z: 0 };
 
   constructor() {
     const params = new URLSearchParams(location.hash.slice(1));
@@ -246,6 +253,13 @@ export class App implements DreamContext {
 
   hint(text: string): void {
     $('hint').textContent = text;
+  }
+
+  footing(x: number, z: number): Footfall {
+    const level = LEVELS[this.levelIndex];
+    // Limbo's sea has come in over the outer streets
+    const sea = level.limbo * THREE.MathUtils.smoothstep(Math.hypot(x, z), 600, 680);
+    return footing(groundAt(x, z, this.streamer.seed), level, sea);
   }
 
   kick(reason?: string): void {
@@ -687,14 +701,13 @@ export class App implements DreamContext {
     this.walk.canSprint = !run.limping;
 
     // where the kick and the machine are, as sound
-    const right = { x: -Math.cos(this.walk.yaw), z: Math.sin(this.walk.yaw) };
     const beacon = (kind: 'kick' | 'machine') => {
       const it = run.here.find((i) => i.kind === kind && !i.taken);
       if (!it || run.outcome) return null;
       const dx = it.x - this.walk.x;
       const dz = it.z - this.walk.z;
-      const dist = Math.hypot(dx, dz);
-      return { dist, pan: dist > 1e-3 ? (dx * right.x + dz * right.z) / dist : 0 };
+      const e = toEar(dx, dz, this.walk.yaw, this.ear);
+      return { dist: Math.hypot(dx, dz), x: e.x, z: e.z };
     };
     this.audio.beacons(beacon('kick'), beacon('machine'));
 
@@ -1029,6 +1042,7 @@ export class App implements DreamContext {
     this.post.bloom.enabled = q.bloom;
     this.env.mirrorScale = q.mirror;
     this.streamer.limit = q.chunks;
+    this.audio.setSpatial(name !== 'low');
     const sun = this.env.sun;
     sun.castShadow = q.shadow > 0;
     if (q.shadow > 0 && sun.shadow.mapSize.x !== q.shadow) {
@@ -1156,6 +1170,7 @@ export class App implements DreamContext {
       this.marks.update(this.time);
     }
     this.updateHeist(dt);
+    this.crowdSound();
 
     const fw = new THREE.Vector3();
     if (this.mode === 'walk') fw.copy(this.camera.position);
@@ -1163,7 +1178,7 @@ export class App implements DreamContext {
     this.env.update(dt, this.camera, fw, q.extent, draw);
     const turning = this.hallway.rider ? Math.abs(this.hallway.spin) * 0.45 : 0;
     // slow motion drags the drone down with it
-    this.audio.update(this.folds.motion + turning, level.drone * (0.6 + 0.4 * slow), this.instability);
+    this.audio.update(this.folds.motion + turning, level.drone * (0.6 + 0.4 * slow), this.instability, this.soundScene(slow), dt);
 
     // Finishing.
     this.flash *= Math.exp(-dt * 2.5);
@@ -1185,6 +1200,82 @@ export class App implements DreamContext {
     this.updateHud(dt);
     if (draw) this.post.render(dt);
     if (step === undefined) this.adaptQuality(dt);
+  }
+
+  /** Where the listener is, for the sound beds: on the street as the dreamer, or up at the Architect's camera. */
+  private soundScene(slow: number): Scene {
+    const level = LEVELS[this.levelIndex];
+    const walking = this.mode === 'walk';
+    const f = this.focus();
+    const seed = this.streamer.seed;
+    const rider = walking && !!this.hallway.rider;
+    return {
+      rain: level.weather === 'rain' ? 1 : 0,
+      snow: level.snow,
+      limbo: level.limbo,
+      night: this.env.night,
+      walking,
+      altitude: Math.max(0, this.camera.position.y),
+      hall: rider,
+      cover: walking && !rider ? shelterAt(f.x, f.z, seed) : 0,
+      green: greenAt(f.x, f.z, seed),
+      shore: THREE.MathUtils.smoothstep(Math.hypot(f.x, f.z), 240, 640),
+      slow,
+      // nothing but the drone before the dream has been entered
+      dim: this.started ? this.post.u.uDim.value : 1,
+    };
+  }
+
+  /**
+   * The crowd as sound: its murmur, gathered into a few groups placed around the listener,
+   * and the footsteps of whoever walks close by. The murmur dies as people stop to stare,
+   * and comes back as an uproar when they give chase.
+   */
+  private crowdSound(): void {
+    const walking = this.mode === 'walk';
+    const f = this.focus();
+    const rider = walking && !!this.hallway.rider;
+    // the listener: the dreamer, or the Architect's camera looking down on the crowd around the focus
+    const cam = this.camera.position;
+    const lx = walking ? f.x : cam.x;
+    const lz = walking ? f.z : cam.z;
+    const up = walking ? 0 : Math.max(0, cam.y);
+    let yaw = this.walk.yaw;
+    if (!walking) {
+      const d = this.camera.getWorldDirection(new THREE.Vector3());
+      yaw = Math.atan2(d.x, d.z);
+    }
+    const n = this.crowd.nearest(this.nearPeople);
+    crowdVoices(this.nearPeople, n, f.x, f.z, this.crowdGroups);
+    for (let k = 0; k < CROWD_VOICES; k++) {
+      const g = this.crowdGroups[k];
+      const e = toEar(g.x + f.x - lx, g.z + f.z - lz, yaw, this.ear);
+      const h = this.crowdHeard[k];
+      h.x = e.x;
+      h.y = -up;
+      h.z = e.z;
+      h.gain = g.gain;
+    }
+    const level = LEVELS[this.levelIndex];
+    const far = Math.hypot(f.x - lx, f.z - lz, up);
+    let reach = Math.exp(-far / 140) * (1 - 0.5 * level.limbo) * (1 - 0.3 * level.snow);
+    if (!this.started || this.heistPaused) reach = 0;
+    reach *= 1 - this.post.u.uDim.value;
+    const hush = walking ? Math.min(1, this.crowd.watching / 10) : 0;
+    const uproar = Math.min(1, (this.crowd.hunting + this.guards.hunting) / 4);
+    this.audio.crowd(this.crowdHeard, reach, hush * (1 - uproar), uproar, rider);
+
+    for (const crowd of [this.crowd, this.guards]) {
+      const steps = crowd.footfalls;
+      if (walking && !rider && reach > 0) {
+        for (let i = 0; i < steps.length; i += 2) {
+          const e = toEar(steps[i] - lx, steps[i + 1] - lz, yaw, this.ear);
+          // their feet are a head's height below the ears
+          this.audio.crowdStep(e.x, -1.6, e.z, this.footing(steps[i], steps[i + 1]));
+        }
+      }
+      steps.length = 0;
+    }
   }
 
   private updateHud(dt: number): void {

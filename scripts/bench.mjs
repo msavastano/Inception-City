@@ -52,7 +52,7 @@ const VIEWS = [
   { id: 'night-fold', extra: true, note: 'The Paris Fold at night', level: 1, time: 1, folds: PARIS, cam: { pos: [0, 22, -150], target: [0, 78, 250] } },
   { id: 'courtyard', extra: true, note: 'Level 1, looking down into the blocks', level: 1, cam: { pos: [150, 120, -40], target: [96, 0, 60] } },
   { id: 'third', extra: true, note: 'Behind the dreamer on a street', level: 1, third: true, at: [69.5, -120, 0, 0.06] },
-  { id: 'behind-circus', extra: true, note: 'Behind the dreamer, crossing the Circus', level: 1, third: true, at: [-9, -62, 0.12, 0.16], keys: ['KeyW'], frames: 34 },
+  { id: 'behind-circus', extra: true, note: 'Behind the dreamer, crossing the Circus', level: 1, third: true, at: [-9, -62, 0.12, 0.16], keys: ['KeyW'], frames: 34, phase: 0.3 },
   {
     id: 'behind-curl',
     extra: true,
@@ -63,12 +63,13 @@ const VIEWS = [
       [0, 128, 0, 1, PI / 2, 60],
       [0, 448, 0, 1, PI / 2, 60],
     ],
-    at: [16.5, 84, 0, 0.12],
+    at: [5.5, 78, 0, 0.12],
     keys: ['KeyW'],
     frames: 40,
+    phase: 3.4,
   },
-  { id: 'run', extra: true, note: 'Behind the dreamer, running', level: 1, third: true, at: [69.5, -120, 0, 0.06], keys: ['KeyW'], frames: 50 },
-  { id: 'sprint', extra: true, note: 'Behind the dreamer, sprinting', level: 1, third: true, at: [69.5, -120, 0, 0.06], keys: ['KeyW', 'ShiftLeft'], frames: 43 },
+  { id: 'run', extra: true, note: 'Behind the dreamer, running', level: 1, third: true, at: [69.5, -120, 0, 0.06], keys: ['KeyW'], frames: 50, phase: 0.3 },
+  { id: 'sprint', extra: true, note: 'Behind the dreamer, sprinting', level: 1, third: true, at: [69.5, -120, 0, 0.06], keys: ['KeyW', 'ShiftLeft'], frames: 43, phase: 3.3 },
   { id: 'crowd', extra: true, note: 'Pedestrians at a busy crossing', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, frames: 40 },
   { id: 'stares', extra: true, note: 'The dream unsteady: the crowd stops and stares', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, unstable: 0.55, frames: 160, dt: 0.05 },
 ];
@@ -159,6 +160,8 @@ function shoot(v) {
     const frames = v.frames ?? 45;
     for (let i = 0; i < frames; i++) {
       if (v.unstable) d.instability = v.unstable;
+      // (a stride phase for the last frame, so the shot catches the dreamer mid-stride: a footfall every π)
+      if (v.phase !== undefined && i === frames - 1) d.walk.stepPhase = v.phase;
       d.step(1, v.dt ?? 1 / 60, i === frames - 1);
     }
   } else {

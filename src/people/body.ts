@@ -677,9 +677,9 @@ export function buildBody(shape: BodyShape, detail: BodyDetail): BodyMesh {
   }
 
   // --- a skirt, and the skirts of a long coat --------------------------------------
-  // each side of a skirt hangs from the thigh under it: all of it at the front, where the knee comes through
+  // each side of a skirt hangs from the thigh under it, front and back, so a leg swings inside it and not through it
   const skirtW = (thigh: number) => (cos: number, sin: number): Weights => {
-    const k = thigh * (0.6 + 0.4 * Math.max(0, cos));
+    const k = thigh * (0.82 + 0.18 * Math.max(0, cos));
     return [
       [b('hips'), 1 - k],
       [b(`thigh${sideOf(sin)}` as BoneName), k],

@@ -52,6 +52,25 @@ const VIEWS = [
   { id: 'night-fold', extra: true, note: 'The Paris Fold at night', level: 1, time: 1, folds: PARIS, cam: { pos: [0, 22, -150], target: [0, 78, 250] } },
   { id: 'courtyard', extra: true, note: 'Level 1, looking down into the blocks', level: 1, cam: { pos: [150, 120, -40], target: [96, 0, 60] } },
   { id: 'third', extra: true, note: 'Behind the dreamer on a street', level: 1, third: true, at: [69.5, -120, 0, 0.06] },
+  { id: 'behind-circus', extra: true, note: 'Behind the dreamer, crossing the Circus', level: 1, third: true, at: [-9, -62, 0.12, 0.16], keys: ['KeyW'], frames: 34 },
+  {
+    id: 'behind-curl',
+    extra: true,
+    note: 'Behind the dreamer, heading for the curl',
+    level: 1,
+    third: true,
+    folds: [
+      [0, 128, 0, 1, PI / 2, 60],
+      [0, 448, 0, 1, PI / 2, 60],
+    ],
+    at: [16.5, 84, 0, 0.12],
+    keys: ['KeyW'],
+    frames: 40,
+  },
+  { id: 'run', extra: true, note: 'Behind the dreamer, running', level: 1, third: true, at: [69.5, -120, 0, 0.06], keys: ['KeyW'], frames: 50 },
+  { id: 'sprint', extra: true, note: 'Behind the dreamer, sprinting', level: 1, third: true, at: [69.5, -120, 0, 0.06], keys: ['KeyW', 'ShiftLeft'], frames: 43 },
+  { id: 'crowd', extra: true, note: 'Pedestrians at a busy crossing', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, frames: 40 },
+  { id: 'stares', extra: true, note: 'The dream unsteady: the crowd stops and stares', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, unstable: 0.55, frames: 160, dt: 0.05 },
 ];
 
 function args() {
@@ -129,7 +148,22 @@ function shoot(v) {
   d.settle();
   d.instability = 0;
   d.flash = 0;
-  d.step(30);
+  if (v.gather) {
+    // bring the crowd in around the walker (they are spread over many blocks otherwise)
+    d.crowd.opts.spread = v.gather;
+    d.crowd.scatter(v.at[0], v.at[1], 5);
+  }
+  if (v.keys || v.gather) {
+    // let things move: keys held down for the walker, time for the crowd, at a real frame rate
+    for (const k of v.keys ?? []) d.walk.keys.add(k);
+    const frames = v.frames ?? 45;
+    for (let i = 0; i < frames; i++) {
+      if (v.unstable) d.instability = v.unstable;
+      d.step(1, v.dt ?? 1 / 60, i === frames - 1);
+    }
+  } else {
+    d.step(30);
+  }
   // read the canvas back in the same task as the draw, before the browser clears it
   return { stats: d.stats(), image: document.getElementById('scene').toDataURL('image/jpeg', 0.92) };
 }

@@ -53,6 +53,9 @@ export class CityStreamer {
   readonly groundMaterial = foldedMaterial('ground', { side: THREE.DoubleSide });
   readonly propMaterial = foldedMaterial('prop');
   readonly propDepth = foldedDepthMaterial('prop');
+  /** People (src/people/crowd.ts): the crowd, the guards and Heist mode's target. */
+  readonly personMaterial = foldedMaterial('person');
+  readonly personDepth = foldedDepthMaterial('person');
 
   readonly buildings: SlabPool;
   readonly roofs: SlabPool;

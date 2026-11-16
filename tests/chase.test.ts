@@ -4,7 +4,8 @@ import { CHUNK } from '../src/core/config';
 import { foldPoint } from '../src/core/fold';
 import { CityStreamer } from '../src/city/streamer';
 import { CHASE, boomFollow, clearance } from '../src/modes/chase';
-import { DreamerBody, strideAngles } from '../src/world/dreamer';
+import { strideAt } from '../src/people/rig';
+import { DreamerBody, stridePhaseRate } from '../src/world/dreamer';
 import { HALL_HALF, Hallway } from '../src/world/hallway';
 
 describe('the third-person camera boom', () => {
@@ -128,23 +129,49 @@ describe('the camera inside the rotating hallway', () => {
 });
 
 describe('the dreamer’s body', () => {
-  it('stands still with its legs together and strides with them apart', () => {
-    const still = strideAngles(0, 1.2);
-    for (const a of [...still.thigh, ...still.arm]) expect(a).toBeCloseTo(0, 9);
-    expect(still.drop).toBe(0);
-    const walk = strideAngles(5.5, Math.PI / 2);
-    expect(walk.thigh[0]).toBeGreaterThan(0.3);
-    expect(walk.thigh[1]).toBeCloseTo(-walk.thigh[0]);
-    // the arms swing against the legs
-    expect(Math.sign(walk.arm[0])).toBe(-Math.sign(walk.thigh[0]));
-    const run = strideAngles(13, Math.PI / 2);
-    expect(run.thigh[0]).toBeGreaterThan(walk.thigh[0]);
-    expect(run.lean).toBeGreaterThan(walk.lean);
-    for (let ph = 0; ph < 7; ph += 0.3) {
-      const s = strideAngles(9, ph);
-      expect(s.knee[0]).toBeGreaterThanOrEqual(0);
-      expect(s.knee[1]).toBeGreaterThanOrEqual(0);
-    }
+  it('turns its stride clock with the ground it covers', () => {
+    // one stride (two steps, 2π) for each stride-length of ground, at any pace
+    for (const v of [0.6, 1.4, 3, 5.5, 9, 13]) expect((stridePhaseRate(v) / (Math.PI * 2)) * strideAt(v)).toBeCloseTo(v, 9);
+    // a walk takes about two steps a second, a sprint about four: neither a shuffle nor a blur
+    expect(stridePhaseRate(5.5) / Math.PI).toBeGreaterThan(1.5);
+    expect(stridePhaseRate(5.5) / Math.PI).toBeLessThan(2.6);
+    expect(stridePhaseRate(13) / Math.PI).toBeLessThan(5.2);
+  });
+
+  it('stands with its feet together and strides with them apart', () => {
+    const body = new DreamerBody();
+    const feet = () => {
+      body.group.updateMatrixWorld(true);
+      const at = (name: string) => new THREE.Vector3().setFromMatrixPosition(body.figure.bones.find((b) => b.name === name)!.matrixWorld);
+      return [at('footL'), at('footR')];
+    };
+    for (let i = 0; i < 60; i++) body.animate(1 / 60, { speed: 0, phase: 0, grounded: true, lookYaw: 0, lookPitch: 0 });
+    let [l, r] = feet();
+    const apart = Math.abs(l.z - r.z);
+    expect(apart).toBeLessThan(0.45);
+    // mid-stride at a run: one foot well ahead of the other
+    for (let i = 0; i < 60; i++) body.animate(1 / 60, { speed: 5.5, phase: 0, grounded: true, lookYaw: 0, lookPitch: 0 });
+    [l, r] = feet();
+    expect(l.z - r.z).toBeGreaterThan(apart + 0.3);
+    // half a stride on, the other foot leads
+    for (let i = 0; i < 60; i++) body.animate(1 / 60, { speed: 5.5, phase: Math.PI, grounded: true, lookYaw: 0, lookPitch: 0 });
+    [l, r] = feet();
+    expect(r.z - l.z).toBeGreaterThan(apart + 0.3);
+  });
+
+  it('turns its head to look, and not past its shoulder', () => {
+    const body = new DreamerBody();
+    const nose = () => {
+      body.group.updateMatrixWorld(true);
+      const head = body.figure.bones.find((b) => b.name === 'head')!;
+      return new THREE.Vector3(0, 0, 1).transformDirection(new THREE.Matrix4().multiplyMatrices(head.matrixWorld, body.figure.mesh.skeleton.boneInverses[body.figure.bones.indexOf(head)]));
+    };
+    for (let i = 0; i < 90; i++) body.animate(1 / 60, { speed: 0, phase: 0, grounded: true, lookYaw: 0.8, lookPitch: 0 });
+    // looking to the left is towards +x
+    expect(Math.atan2(nose().x, nose().z)).toBeGreaterThan(0.6);
+    expect(Math.atan2(nose().x, nose().z)).toBeLessThan(1.0);
+    for (let i = 0; i < 90; i++) body.animate(1 / 60, { speed: 0, phase: 0, grounded: true, lookYaw: 3.1, lookPitch: 0 });
+    expect(Math.abs(Math.atan2(nose().x, nose().z))).toBeLessThan(0.25);
   });
 
   it('is placed upright on the surface, facing where it is told', () => {

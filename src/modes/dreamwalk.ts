@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BLOCK, streetHalfWidth } from '../core/config';
 import { Fold, foldPoint } from '../core/fold';
-import { DreamerBody } from '../world/dreamer';
+import { DreamerBody, stridePhaseRate } from '../world/dreamer';
 import { HALL_LENGTH, Hallway } from '../world/hallway';
 import { CHASE, boomFollow, clearance } from './chase';
 import { DreamContext } from './context';
@@ -461,7 +461,8 @@ export class DreamWalk {
 
     if (grounded && moving > 0.5) {
       const before = Math.floor(this.stepPhase / Math.PI);
-      this.stepPhase += dt * moving * 1.35;
+      // the stride clock turns with the ground covered, so the body's feet land where the steps are heard
+      this.stepPhase += dt * stridePhaseRate(moving);
       if (Math.floor(this.stepPhase / Math.PI) !== before) this.ctx.audio.step();
     }
     this.bob = grounded ? Math.abs(Math.sin(this.stepPhase)) * 0.06 * Math.min(1, moving / WALK) : 0;

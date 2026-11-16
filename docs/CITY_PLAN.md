@@ -139,14 +139,14 @@ The rules live in `src/game/heist.ts` with no rendering in them, so `tests/heist
 
 **C** (or the View button) swaps the first-person eye for a camera standing behind the dreamer, so you can watch yourself walk up the curl. First person stays the default, and the choice is remembered on the device. It works everywhere Dream Walk does: on the street, on a ride, inside the hallway and through a whole job.
 
-- **The body.** A figure in a dark suit, white shirt and tie, built from a few capsules (`src/world/dreamer.ts`). Its walk is procedural, driven by the same stride clock as the footsteps: legs and arms swing against each other, knees fold through the swing, and at running pace it leans in and pumps its arms. In the air one knee comes up and the arms go out. It turns to face the way you walk, while its head turns towards where you look.
+- **The body.** A man in a dark suit, white shirt and dark red tie: one skinned mesh on the skeleton everyone in the dream shares (5.9), posed each frame from its clips (`src/world/dreamer.ts`). Standing, he breathes and shifts his weight. Moving, a stroll, a jog and a sprint are mixed by speed, and all three follow the same stride clock as the footsteps. That clock turns with the ground covered (one stride for each stride-length of street), so his feet stay where they land and you hear them as they do. In the air his legs tuck; landing from a standing jump, his knees take it. He turns to face the way you walk, while his neck and head turn towards where you look. In a job he reaches down when he picks something up and flinches when a projection strikes him.
 - **The camera.** It looks exactly the way the dreamer does (tipped down 0.1 rad so the feet stay in the picture), from 3.8 m back, 0.35 m up and 0.6 m over the right shoulder.
 - **The boom lives in fabric space.** Like the walker, the camera's boom is laid out on the flat sheet next to the walker and only then folded, at the camera's own spot. Walls are building footprints there, so the boom swings out to the shoulder, then back, and stops short of the first footprint (widened by 0.3 m for the near plane). Because a point a little above the sheet folds to a point a little above the folded street, the camera stays on the street's side of any curl, however the city is bent. Looking up, it slides along the street towards your feet instead of going under it. Where crossing folds cut the sheet, a spot a few metres away can fold to somewhere else entirely, so there the camera is carried rigidly with the dreamer's own frame instead.
 - **Pull in fast, let out slow.** A wall behind you pulls the camera in at once; it eases back out over a second, so walking past corners doesn't make it pump. Pinned so close that it would be inside your head, the body is hidden and the view is simply first person.
 - **In the hallway** the same boom is laid out in the corridor's own frame and kept inside its four walls, which turn with it.
 - **Trees and lamp posts** don't stop the camera; pulling in at every one would make it lurch.
 
-`tests/chase.test.ts` pins the boom against walls, against the footprints of a real generated city from 400 spots and headings, inside a turning hallway, and the body's stride and placement.
+`tests/chase.test.ts` pins the boom against walls, against the footprints of a real generated city from 400 spots and headings, inside a turning hallway, and the body's stride clock, stride, head turn and placement.
 
 ---
 
@@ -261,6 +261,26 @@ Before and after, from the bench (Medium, the same seed and view):
 
 ![The Paris Fold, before and after](images/light-and-air/paris-medium.jpg)
 
+### 5.9 People
+
+The dreamer and every projection are the same kind of thing: a body built in code, on one shared skeleton, moved by the same few clips.
+
+- **The skeleton and the clips are the one thing not generated here.** They come from Quaternius's Universal Animation Library, which is CC0 (see `ASSETS.md`). `scripts/pack-people.mjs` keeps 22 of its bones and eleven clips (standing, talking, two walks, a jog, a sprint, a jump, a landing, a blow, a reach and a jab), quantises them to 16 bits and writes them into `src/people/rigdata.ts`, about 60 kB. The pack's own mesh is not used and nothing is downloaded at run time. `src/people/rig.ts` decodes the clips, samples and blends poses, and has no dependency on the 3D engine.
+- **Bodies are lofts.** `src/people/body.ts` strings rings of vertices along the skeleton's limbs, torso and head, each ring tied to one or two bones: a jacket with a hem that follows the thighs, sleeves that hang from a ball at the shoulder, trouser legs, shoes with heels, a collar, a tie. A hat, long hair, a skirt, the skirts of a long coat and a bag are extra pieces in the same mesh. The same builder makes the dreamer (about 5,700 triangles) and a pedestrian (about 900 of the crowd mesh's 1,150, depending on what they wear), and builds a man and a woman from the same vertices in the same order, so one can be morphed into the other.
+- **The dreamer** is an ordinary skinned mesh with its own bones (`src/people/figure.ts`), posed on the CPU. That costs one draw call (and one in the shadow pass) where the capsule figure it replaced cost twenty.
+- **The crowd is one instanced mesh, drawn in one call** (`src/people/crowd.ts`). Every clip's bones are baked into a small half-float texture: a row for each frame, three texels for each bone. Each pedestrian is two dozen numbers: where they are, which row of the texture they are on (and, while changing clips, the row they are leaving and how much of it is left), how far their head is turned, their build, the pieces they wear, and their colours. The vertex shader shrinks the pieces a person does not wear to a point, morphs the build, turns the head on the neck, reads two bones from the texture (the sampler blends between frames) and skins the vertex, then hands it to the same fold maths as a lamp post. Colour comes from what the vertex is made of: jacket, trousers, shirt, tie, skin, hair, shoes.
+- **Feet do not slide.** `pack-people.mjs` measures, for each walking clip, how far a planted foot travels under the hips in one cycle: its stride. Wherever a clip is played, its phase moves on by distance covered divided by that stride. Pedestrians walk at their own pace around the pace their walk was animated at (about 0.9 to 1.4 m/s), so a hurried walker simply takes quicker steps. All walking clips start as the left foot lands, so a walk can turn into a run, or a stroll be mixed with a jog, frame for frame.
+- **What they do.** They walk the sidewalk lattice as before (`src/world/projections.ts`); a few stand at corners for a while, talking or waiting. As suspicion rises they turn their heads to follow the dreamer, then stop and face them, then run at them. Changes of clip fade over a third of a second.
+- **Cost.** Sorted nearest first each frame, so the shadow pass stops after the people within 110 m: a far-off pedestrian's shadow is a pixel or two. On Medium (400 people) an ordinary street costs the same 29 draw calls as before and about 8% more triangles; behind the dreamer the frame went from 69 draw calls to 31.
+
+`tests/people.test.ts` pins the skeleton and the clips (unit rotations, loops that close), the gait mix, planted feet against each clip's stride, the body builder's weights and budgets, the bone texture against the CPU poses, the wardrobe, and the crowd's walking, staring and hunting. `/lab.html` (dev server only) shows the figure and the crowd out of the city.
+
+Before and after, from the bench (Medium, the same seed and view):
+
+![Pedestrians at a crossing, before and after](images/people/crowd-medium.jpg)
+
+![Behind the dreamer, before and after](images/people/run-medium.jpg)
+
 ## 6. Scaling
 
 The goal is a city that is effectively infinite, foldable in real time, and still smooth on a phone. Each of the decisions below exists to keep one cost constant as the city grows.
@@ -284,12 +304,12 @@ The result is about eleven draw calls for the whole city, whether it has two tho
 - **Ground tiles** come in two tessellations. Only chunks crossed by a curl get the fine 40 × 40 grid needed to bend smoothly. Everywhere else a 2 × 2 tile is enough.
 - **Props** (trees and lamps) are only written for chunks inside a smaller ring around the viewer, with their own budget per frame.
 - **Facades** fade their window pattern to its average colour once a window is only a few pixels wide, which removes moiré without textures or mipmaps. The rooms behind the windows are only traced while a window is big enough on screen to show one.
-- **The crowd** is a single instanced mesh. Its size follows the quality tier, from 180 to 900 people.
+- **The crowd** is a single instanced mesh of skinned people (5.9). Its size follows the quality tier, from 180 to 900 people, and only those within 110 m are drawn into the shadow map.
 - **The café explosion** throws between 1,600 (Low) and 7,000 (Ultra) shards, all in one instanced mesh that is hidden the rest of the time. The building shader's blast branch costs one uniform test per pixel while the dream holds.
 
 ### 6.5 No textures
 
-All surface detail comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, the rooms behind the windows, snow cover, puddles and raindrop ripples, crosswalks, park paths, lamp pools, contact shadows (5.8), glowing crease lines and the glowing lattice on the underside of a fold. The build ships no image assets at all. The whole app, including the 3D engine, is about 720 kB of JavaScript (about 190 kB gzipped).
+All surface detail comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, the rooms behind the windows, snow cover, puddles and raindrop ripples, crosswalks, park paths, lamp pools, contact shadows (5.8), glowing crease lines and the glowing lattice on the underside of a fold. The build ships no image assets at all. The whole app, including the 3D engine and the people's packed animation (5.9), is about 930 kB of JavaScript (about 285 kB gzipped).
 
 ### 6.6 Bounded fold cost
 
@@ -340,8 +360,11 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 ### Milestone 1.5: behind the dreamer (done)
 - A third-person camera in Dream Walk that shows the dreamer's own body, walking, running and jumping, and keeps out of buildings, curls and the hallway's walls (4.6)
 
-### Milestone 1.6: light and air (this release)
+### Milestone 1.6: light and air (done)
 - Computed contact shadows, haze that takes the sky's colour and hides the city's edge, lamp light and halos at night, a neutral tone curve with every dial in one place, and a screenshot bench for judging changes like these (5.8)
+
+### Milestone 1.7: people (this release)
+- The dreamer as a skinned man in a suit who really walks, runs and jumps, and a crowd of varied pedestrians (suits, long coats, dresses, hats, briefcases) who walk, stand, turn to stare and run, all in one draw call, on free CC0 animation (5.9)
 
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
@@ -367,7 +390,7 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/core/config.ts` | Grid constants, slab sizes, street widths |
 | `src/core/rng.ts` | Seeded hashing, value noise and fBm |
 | `src/city/generator.ts` | Deterministic chunk generation: blocks, lots, towers, roofs, props |
-| `src/city/shaders.ts` | GLSL: fold transform, facade painter, ground painter, props, picking |
+| `src/city/shaders.ts` | GLSL: fold transform, facade painter, ground painter, props, people, picking |
 | `src/city/materials.ts` | Shared uniforms and patched Three.js materials, depth and pick variants |
 | `src/city/pool.ts` | The slab allocator for instanced attributes |
 | `src/city/streamer.ts` | World-space streaming, LOD, collision and raise-brush edits |
@@ -376,11 +399,18 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/world/look.ts` | The dials for the lighting pass (tone curve, ambient occlusion, haze, glow) and their link parameters |
 | `src/world/hallway.ts` | The rotating hallway: geometry, shader painter and the rider's physics |
 | `src/world/collapse.ts` | The café explosion: the shard planner, the slow-motion timeline and the automatic kick |
-| `src/world/dreamer.ts` | The dreamer's body for the third-person view, and its procedural walk |
+| `src/world/dreamer.ts` | The dreamer's body for the third-person view: which clips to mix, the stride clock, the head turn |
+| `src/world/projections.ts` | The crowd's behaviour: walking the sidewalks, standing, staring, hunting, and which clip each one is in |
+| `src/people/rig.ts`, `rigdata.ts` | The shared skeleton and its clips (packed CC0 animation, see `ASSETS.md`): sampling, blending, gait and stride |
+| `src/people/body.ts` | Bodies and clothes built in code as lofts on the skeleton, for the dreamer and for the crowd |
+| `src/people/figure.ts` | One skinned figure with its own bones (the dreamer) |
+| `src/people/crowd.ts` | The crowd's mesh, the bone texture, the wardrobe and the instanced `People` |
+| `scripts/pack-people.mjs` | Packs the skeleton and clips from the animation library into `rigdata.ts` and measures each walk's stride |
+| `lab.html`, `src/lab.ts` | A dev-only page for looking at the figure, the clips and the crowd out of the city |
 | `src/modes/` | Architect controls, Dream Walk controls, presets, the ride fold (`ride.ts`), the third-person camera boom (`chase.ts`) |
 | `src/game/heist.ts` | Heist mode's rules: the topside clock, health, Limbo, placement and the kicks |
 | `src/game/marks.ts` | Heist mode's things in the city: sleep machine, gramophone, totem, target and their beams |
 | `src/fx/` | GPU picking, procedural audio, post-processing, the wet-street mirror (`reflection.ts`), lamp halos (`halos.ts`) |
 | `scripts/bench.mjs` | The screenshot bench: eight seeded views per quality tier, with draw calls, triangles and memory |
 | `src/ui/` | Styles and the HUD totem |
-| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror, café explosion, Heist mode, third-person camera and lighting-layout tests |
+| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror, café explosion, Heist mode, third-person camera, lighting-layout and people tests |

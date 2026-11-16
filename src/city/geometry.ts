@@ -55,14 +55,6 @@ export function lampGeometry(): THREE.BufferGeometry {
   return merge([post, base, lantern, cap]);
 }
 
-export function personGeometry(): THREE.BufferGeometry {
-  const legs = tag(new THREE.BoxGeometry(0.34, 0.86, 0.22, 2, 2, 1).translate(0, 0.43, 0), 0, [0.08, 0.08, 0.09]);
-  const body = tag(new THREE.CylinderGeometry(0.19, 0.24, 0.78, 8).translate(0, 1.25, 0), 3, [0.2, 0.2, 0.2]);
-  const shoulders = tag(new THREE.SphereGeometry(0.22, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2).scale(1.05, 0.5, 0.8).translate(0, 1.62, 0), 3, [0.2, 0.2, 0.2]);
-  const head = tag(new THREE.SphereGeometry(0.12, 10, 8).translate(0, 1.79, 0), 4, [0.78, 0.6, 0.48]);
-  return merge([legs, body, shoulders, head]);
-}
-
 /**
  * A piece of blown-out wall: an irregular slab about a metre across, centred on
  * the origin, its faces looking along ±z (the wall's normal). Scaled per shard.

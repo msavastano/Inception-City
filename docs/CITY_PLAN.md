@@ -255,6 +255,12 @@ Every dial is in `src/world/look.ts` (global) and `src/world/themes.ts` (per lev
 
 A look cannot be reviewed from a diff, so `npm run bench` (after `npm run build`) renders the same eight seeded views at each quality tier and prints draw calls, triangles and render-target memory for each; `--compare` lays two runs side by side. It needs Playwright, which is not a dependency of the game.
 
+Before and after, from the bench (Medium, the same seed and view):
+
+![A street at midnight, before and after](images/light-and-air/night-medium.jpg)
+
+![The Paris Fold, before and after](images/light-and-air/paris-medium.jpg)
+
 ## 6. Scaling
 
 The goal is a city that is effectively infinite, foldable in real time, and still smooth on a phone. Each of the decisions below exists to keep one cost constant as the city grows.

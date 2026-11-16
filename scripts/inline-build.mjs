@@ -12,11 +12,17 @@ const read = (href) => readFileSync(join(dist, href.replace(/^\.?\//, '')), 'utf
 
 html = html.replace(/<link rel="stylesheet"[^>]*href="([^"]+)"[^>]*>/g, (_, href) => `<style>\n${read(href)}\n</style>`);
 html = html.replace(/<script type="module"[^>]*src="([^"]+)"[^>]*><\/script>/g, (_, src) => {
-  const js = read(src).replace(/<\/script/gi, '<\\/script');
+  let js = read(src).replace(/<\/script/gi, '<\\/script');
+  // recorded sounds sit beside the script as files: carry them inside it instead
+  js = js.replace(/new URL\(([`'"])([^`'"]+\.opus)\1,\s*import\.meta\.url\)\.href/g, (_m, _q, file) => {
+    const data = readFileSync(join(dist, dirname(src), file)).toString('base64');
+    return JSON.stringify(`data:audio/ogg;base64,${data}`);
+  });
   return `<script type="module">\n${js}\n</script>`;
 });
 
 if (/(src|href)="\.?\/?assets\//.test(html)) throw new Error('an asset reference was left un-inlined');
+if (/import\.meta\.url/.test(html)) throw new Error('a file beside the script was left un-inlined');
 
 mkdirSync(join(root, 'dist-single'), { recursive: true });
 writeFileSync(join(root, 'dist-single', 'index.html'), html);

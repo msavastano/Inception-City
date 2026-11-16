@@ -1,11 +1,109 @@
+import { SoundBank } from './soundbank';
+import { BED_NAMES, BedMix, BedName, bedRate, CROWD_VOICES, Footfall, mixBeds, Scene, StepSet } from './soundscape';
+
 /**
- * Procedural sound: no audio files. A low drone tuned per dream level, a
- * stone-on-stone rumble while the city folds, the brass "BRAAAM" when a fold
- * lands, footsteps, and the kick.
+ * Sound. Two kinds, layered:
+ *  - made here from oscillators and noise: the drone tuned per dream level, the
+ *    stone-on-stone rumble while the city folds, the brass "BRAAAM" when a fold
+ *    lands, the kick, the wind;
+ *  - recorded (CC0, see ASSETS.md): a bed for each level and for the hallway,
+ *    footsteps for each surface, the crowd's murmur.
+ * What should be heard where is decided in soundscape.ts; this file plays it.
+ * The crowd, the heist's kick and its sleep machine are placed around the
+ * listener's head (HRTF), so they can be found by ear.
  */
+
+/** How loud each bed is when fully present (the recordings all sit at about the same level). */
+const BED_LEVEL: Record<BedName, number> = { city: 1.45, birds: 0.6, rain: 0.8, cover: 0.75, sea: 0.85, room: 0.55, wind: 0.7 };
+/** Footsteps, by set: how loud, and how much goes to the reverb (snow and carpet swallow sound). */
+const STEP_LEVEL: Record<StepSet, number> = { stone: 0.5, gravel: 0.42, grass: 0.5, snow: 0.5, wet: 0.36, water: 0.42, carpet: 0.6, wood: 0.5 };
+const STEP_ECHO: Record<StepSet, number> = { stone: 0.22, gravel: 0.12, grass: 0.06, snow: 0.03, wet: 0.2, water: 0.18, carpet: 0.02, wood: 0.1 };
+/** With no recordings, a footstep is a burst of noise around this pitch (Hz). */
+const STEP_HZ: Record<StepSet, number> = { stone: 750, gravel: 1700, grass: 420, snow: 520, wet: 1500, water: 2200, carpet: 260, wood: 330 };
+const MURMUR_LEVEL = 0.9;
+/** Each murmuring group plays the loop at its own speed, so no two sound alike. */
+const MURMUR_RATES = [0.93, 1.0, 1.08];
+/** Panners that carry other people's footsteps. */
+const STEP_PANNERS = 3;
+const PLAIN_STEP: Footfall = { set: 'stone', gain: 1 };
+
+/** A sound somewhere around the listener: x to the right, y up, z behind (metres). */
+export interface Heard {
+  x: number;
+  y: number;
+  z: number;
+  gain: number;
+}
+
+/** One looping layer: two copies of a mono recording half a loop apart, left and right, so it fills the room. */
+class Bed {
+  private filter: BiquadFilterNode;
+  private out: GainNode;
+  private sources: AudioBufferSourceNode[] = [];
+  /** Seconds it has been silent while still playing. */
+  quiet = 0;
+
+  constructor(
+    private ctx: AudioContext,
+    dest: AudioNode,
+    private level: number,
+  ) {
+    this.filter = ctx.createBiquadFilter();
+    this.filter.type = 'lowpass';
+    this.filter.frequency.value = 16000;
+    this.filter.Q.value = 0.4;
+    this.out = ctx.createGain();
+    this.out.gain.value = 0;
+    this.filter.connect(this.out).connect(dest);
+  }
+
+  /** Where sources plug in. */
+  get input(): AudioNode {
+    return this.filter;
+  }
+
+  get playing(): boolean {
+    return this.sources.length > 0;
+  }
+
+  play(buffer: AudioBuffer, rate: number): void {
+    const t = this.ctx.currentTime;
+    this.out.gain.cancelScheduledValues(t);
+    this.out.gain.setValueAtTime(0, t);
+    for (const side of [-1, 1]) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = buffer;
+      src.loop = true;
+      src.playbackRate.value = rate;
+      const pan = this.ctx.createStereoPanner();
+      pan.pan.value = side * 0.75;
+      src.connect(pan).connect(this.filter);
+      src.start(t, side > 0 ? buffer.duration / 2 : 0);
+      this.sources.push(src);
+    }
+  }
+
+  stop(): void {
+    for (const s of this.sources) {
+      s.stop();
+      s.disconnect();
+    }
+    this.sources.length = 0;
+    this.quiet = 0;
+  }
+
+  set(mix: BedMix, rate: number): void {
+    const t = this.ctx.currentTime;
+    this.out.gain.setTargetAtTime(mix.gain * this.level, t, 0.5);
+    this.filter.frequency.setTargetAtTime(Math.min(mix.cutoff, this.ctx.sampleRate * 0.45), t, 0.25);
+    for (const s of this.sources) s.playbackRate.setTargetAtTime(rate, t, 0.25);
+  }
+}
+
 export class DreamAudio {
   private ctx: AudioContext | null = null;
   private master!: GainNode;
+  private comp!: DynamicsCompressorNode;
   private reverb!: ConvolverNode;
   private wet!: GainNode;
   private droneOsc: OscillatorNode[] = [];
@@ -18,14 +116,40 @@ export class DreamAudio {
   private lastBraam = 0;
   // Heist mode: a music box at the kick, a hum at the sleep machine, a heartbeat when hurt
   private boxGain: GainNode | null = null;
-  private boxPan!: StereoPannerNode;
+  private boxPan!: PannerNode;
   private boxFilter!: BiquadFilterNode;
   private humGain!: GainNode;
-  private humPan!: StereoPannerNode;
+  private humPan!: PannerNode;
   private nextBeat = 0;
+  // recordings: beds, footsteps, the crowd
+  private bank: SoundBank | null = null;
+  private beds = new Map<BedName, Bed>();
+  private lastStep: Partial<Record<StepSet, number>> = {};
+  private foot = 0;
+  private footPans: StereoPannerNode[] = [];
+  private murmurs: { src: AudioBufferSourceNode; filter: BiquadFilterNode; gain: GainNode; pan: PannerNode }[] | null = null;
+  private stepPans: PannerNode[] = [];
+  private nextPan = 0;
+  private rate = 1;
+  /** Place sounds with head-related filters (true) or plain left-right panning (cheaper). */
+  private hrtf = true;
 
   get ready(): boolean {
     return !!this.ctx;
+  }
+
+  /** The context and the last node before the speakers, for recording what the game sounds like (scripts/listen.mjs). */
+  get context(): AudioContext | null {
+    return this.ctx;
+  }
+
+  get output(): AudioNode | null {
+    return this.ctx ? this.comp : null;
+  }
+
+  /** True once the footsteps have loaded: the recordings can be decoded here. */
+  get recorded(): boolean {
+    return !!this.bank?.steps;
   }
 
   /** Must be called from a user gesture. */
@@ -42,6 +166,7 @@ export class DreamAudio {
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14;
     comp.ratio.value = 4;
+    this.comp = comp;
     this.master = ctx.createGain();
     this.master.gain.value = this.muted ? 0 : 0.8;
     this.master.connect(comp).connect(ctx.destination);
@@ -102,6 +227,76 @@ export class DreamAudio {
     this.rumbleGain.connect(this.master);
     this.rumbleGain.connect(this.reverb);
     src.start();
+
+    this.bank = new SoundBank(ctx);
+    this.bank.wantSteps();
+    this.startWind(ctx);
+  }
+
+  /**
+   * Wind: noise through two narrow filters that wander, one in each ear, with slow gusts.
+   * It is the bed of the snow level and of the Architect's height, and is always running.
+   */
+  private startWind(ctx: AudioContext): void {
+    const bed = new Bed(ctx, this.master, BED_LEVEL.wind);
+    this.beds.set('wind', bed);
+    for (const side of [-1, 1]) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noise;
+      src.loop = true;
+      src.playbackRate.value = side > 0 ? 0.83 : 1;
+      const band = ctx.createBiquadFilter();
+      band.type = 'bandpass';
+      band.frequency.value = side > 0 ? 420 : 330;
+      band.Q.value = 1.1;
+      const wander = ctx.createOscillator();
+      wander.frequency.value = side > 0 ? 0.083 : 0.061;
+      const wanderBy = ctx.createGain();
+      wanderBy.gain.value = 170;
+      wander.connect(wanderBy).connect(band.frequency);
+      const gust = ctx.createGain();
+      gust.gain.value = 0.62;
+      const gustLfo = ctx.createOscillator();
+      gustLfo.frequency.value = side > 0 ? 0.137 : 0.097;
+      const gustBy = ctx.createGain();
+      gustBy.gain.value = 0.38;
+      gustLfo.connect(gustBy).connect(gust.gain);
+      const pan = ctx.createStereoPanner();
+      pan.pan.value = side * 0.7;
+      src.connect(band).connect(gust).connect(pan).connect(bed.input);
+      src.start(0, side > 0 ? 0.9 : 0);
+      wander.start();
+      gustLfo.start();
+    }
+  }
+
+  /** Head-related placement costs a convolution per sound; plain panning is for slow machines. */
+  setSpatial(hrtf: boolean): void {
+    this.hrtf = hrtf;
+    const model = hrtf ? 'HRTF' : 'equalpower';
+    for (const p of [...this.stepPans, ...(this.murmurs ?? []).map((m) => m.pan), ...(this.boxGain ? [this.boxPan, this.humPan] : [])]) p.panningModel = model;
+  }
+
+  /** A panner that only gives direction: loudness over distance is worked out by whoever places the sound. */
+  private panner(): PannerNode {
+    const p = this.ctx!.createPanner();
+    p.panningModel = this.hrtf ? 'HRTF' : 'equalpower';
+    p.distanceModel = 'linear';
+    p.rolloffFactor = 0;
+    return p;
+  }
+
+  /** Point a panner at a place around the listener (only the direction is used). */
+  private place(p: PannerNode, x: number, y: number, z: number, glide = 0.08): void {
+    const d = Math.hypot(x, y, z);
+    const k = d > 1e-3 ? 2 / d : 0;
+    const t = this.ctx!.currentTime;
+    const to = [x * k, y * k, d > 1e-3 ? z * k : -2];
+    if (p.positionX) {
+      [p.positionX, p.positionY, p.positionZ].forEach((param, i) => (glide > 0 ? param.setTargetAtTime(to[i], t, glide) : param.setValueAtTime(to[i], t)));
+    } else {
+      p.setPosition(to[0], to[1], to[2]);
+    }
   }
 
   setMuted(m: boolean): void {
@@ -109,8 +304,8 @@ export class DreamAudio {
     if (this.ctx) this.master.gain.setTargetAtTime(m ? 0 : 0.8, this.ctx.currentTime, 0.1);
   }
 
-  /** Called every frame. */
-  update(foldMotion: number, droneHz: number, instability: number): void {
+  /** Called every frame. `scene` is where the listener is, for the beds; dt is the frame's length. */
+  update(foldMotion: number, droneHz: number, instability: number, scene?: Scene, dt = 1 / 60): void {
     const ctx = this.ctx;
     if (!ctx) return;
     const t = ctx.currentTime;
@@ -119,6 +314,132 @@ export class DreamAudio {
     this.rumbleFilter.frequency.setTargetAtTime(90 + m * 260, t, 0.1);
     const mul = [1, 1, 2, 0.5];
     this.droneOsc.forEach((o, i) => o.frequency.setTargetAtTime(droneHz * mul[i] * (1 - instability * 0.04), t, 1.5));
+    if (scene) this.ambience(ctx, scene, dt);
+  }
+
+  /** Bring each bed to where the scene wants it. A recording is loaded when first needed and stops once it has been silent a while. */
+  private ambience(ctx: AudioContext, scene: Scene, dt: number): void {
+    const mix = mixBeds(scene);
+    this.rate = bedRate(scene.slow);
+    for (const name of BED_NAMES) {
+      const want = mix[name];
+      let bed = this.beds.get(name);
+      if (name !== 'wind') {
+        const audible = want.gain > 0.004;
+        if (!bed) {
+          if (!audible) continue;
+          bed = new Bed(ctx, this.master, BED_LEVEL[name]);
+          this.beds.set(name, bed);
+        }
+        if (audible) {
+          bed.quiet = 0;
+          if (!bed.playing) {
+            const buffer = this.bank?.loop(name) ?? null;
+            if (buffer) bed.play(buffer, this.rate);
+          }
+        } else if (bed.playing && (bed.quiet += dt) > 4) bed.stop();
+      }
+      bed!.set(want, name === 'wind' ? 1 : this.rate);
+    }
+  }
+
+  /** Which beds can be heard right now, and how loud each is asked to be (for tests and the curious). */
+  get playing(): string[] {
+    return [...this.beds].filter(([name, bed]) => name === 'wind' || bed.playing).map(([name]) => name);
+  }
+
+  /**
+   * The crowd's murmur: a few groups around the listener (see crowdVoices). `level` is how much of
+   * it reaches the ears at all; the crowd falls silent as it notices the dreamer (`hush`), and
+   * finds its voice again, louder and sharper, when it turns on them (`uproar`).
+   */
+  crowd(voices: readonly Heard[], level: number, hush: number, uproar: number, muffled = false): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (!this.murmurs) {
+      if (level < 0.01 || !voices.some((v) => v.gain > 0.01)) return;
+      const buffer = this.bank?.loop('murmur') ?? null;
+      if (!buffer) return;
+      this.murmurs = [];
+      for (let k = 0; k < CROWD_VOICES; k++) {
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.loop = true;
+        src.playbackRate.value = MURMUR_RATES[k];
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 1500;
+        filter.Q.value = 0.5;
+        const gain = ctx.createGain();
+        gain.gain.value = 0;
+        const pan = this.panner();
+        const echo = ctx.createGain();
+        echo.gain.value = 0.25;
+        src.connect(filter).connect(gain).connect(pan).connect(this.master);
+        gain.connect(echo).connect(this.reverb);
+        src.start(0, (k / CROWD_VOICES) * buffer.duration);
+        this.murmurs.push({ src, filter, gain, pan });
+      }
+    }
+    const t = ctx.currentTime;
+    this.murmurs.forEach((m, k) => {
+      const v = voices[k];
+      const g = v ? v.gain * level * (1 - 0.88 * hush) * (1 + 0.9 * uproar) : 0;
+      m.gain.gain.setTargetAtTime(g * MURMUR_LEVEL, t, 0.4);
+      m.filter.frequency.setTargetAtTime((1500 + 2500 * uproar) * (muffled ? 0.45 : 1), t, 0.4);
+      m.src.playbackRate.setTargetAtTime(MURMUR_RATES[k] * (1 + 0.12 * uproar) * this.rate, t, 0.4);
+      if (v) this.place(m.pan, v.x, v.y, v.z, 0.25);
+    });
+  }
+
+  /** Somebody else's footstep, heard from where they are. */
+  crowdStep(x: number, y: number, z: number, f: Footfall = PLAIN_STEP): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.bank?.steps) return;
+    if (this.stepPans.length === 0) {
+      for (let i = 0; i < STEP_PANNERS; i++) {
+        const p = this.panner();
+        p.connect(this.master);
+        this.stepPans.push(p);
+      }
+    }
+    const d = Math.hypot(x, y, z);
+    const p = this.stepPans[this.nextPan++ % STEP_PANNERS];
+    this.place(p, x, y, z, 0);
+    // quieter and duller with distance
+    this.sample(f.set, (f.gain * 0.75) / (1 + (d / 5) ** 2), Math.min(f.tone ?? 20000, 9000 / (1 + d / 7)), p, 0.3);
+  }
+
+  /** Play one recorded footstep of a set into `out`. */
+  private sample(set: StepSet, gain: number, tone: number | undefined, out: AudioNode, echo: number): void {
+    const ctx = this.ctx!;
+    const bank = this.bank!;
+    const n = bank.stepCount(set);
+    let i = Math.floor(Math.random() * n);
+    // never the same recording twice running
+    if (i === this.lastStep[set]) i = (i + 1) % n;
+    this.lastStep[set] = i;
+    const [start, length] = bank.step(set, i);
+    const t = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = bank.steps;
+    src.playbackRate.value = 0.94 + Math.random() * 0.12;
+    const g = ctx.createGain();
+    g.gain.value = STEP_LEVEL[set] * gain * (0.8 + 0.4 * Math.random());
+    let head: AudioNode = src;
+    if (tone && tone < 16000) {
+      const f = ctx.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.value = tone;
+      head = src.connect(f);
+    }
+    head.connect(g).connect(out);
+    if (echo > 0) {
+      const send = ctx.createGain();
+      send.gain.value = echo;
+      g.connect(send).connect(this.reverb);
+    }
+    src.start(t, start, length);
   }
 
   /** The horn. */
@@ -262,11 +583,13 @@ export class DreamAudio {
   }
 
   /**
-   * Heist beacons, every frame: how far (m) and which way (-1 left .. 1 right)
-   * the nearest kick and sleep machine are, or null for none. The kick's music
-   * carries about four blocks; the machine's hum about two.
+   * Heist beacons, every frame: how far (m) and which way (x to the right, z
+   * behind, as the listener hears it) the nearest kick and sleep machine are,
+   * or null for none. The kick's music carries about four blocks; the
+   * machine's hum about two. Both are placed around the head, so "behind you"
+   * sounds different from "ahead".
    */
-  beacons(kick: { dist: number; pan: number } | null, machine: { dist: number; pan: number } | null): void {
+  beacons(kick: { dist: number; x: number; z: number } | null, machine: { dist: number; x: number; z: number } | null): void {
     const ctx = this.ctx;
     if (!ctx) return;
     if (!this.boxGain) this.startBeacons(ctx);
@@ -274,10 +597,10 @@ export class DreamAudio {
     const k = kick ? Math.max(0, 1 - kick.dist / 260) ** 2 : 0;
     this.boxGain!.gain.setTargetAtTime(k * 0.34, t, 0.15);
     this.boxFilter.frequency.setTargetAtTime(500 + 7500 * k, t, 0.15);
-    if (kick) this.boxPan.pan.setTargetAtTime(kick.pan * 0.8, t, 0.1);
+    if (kick) this.place(this.boxPan, kick.x, 0, kick.z);
     const m = machine ? Math.max(0, 1 - machine.dist / 130) ** 2 : 0;
     this.humGain.gain.setTargetAtTime(m * 0.16, t, 0.15);
-    if (machine) this.humPan.pan.setTargetAtTime(machine.pan * 0.8, t, 0.1);
+    if (machine) this.place(this.humPan, machine.x, 0, machine.z);
   }
 
   /** A heartbeat that quickens as hurt (0..1) rises. Call every frame; 0 is silent. */
@@ -421,7 +744,7 @@ export class DreamAudio {
     this.boxFilter = ctx.createBiquadFilter();
     this.boxFilter.type = 'lowpass';
     this.boxFilter.frequency.value = 600;
-    this.boxPan = ctx.createStereoPanner();
+    this.boxPan = this.panner();
     this.boxGain = ctx.createGain();
     this.boxGain.gain.value = 0;
     src.connect(this.boxFilter).connect(this.boxPan).connect(this.boxGain);
@@ -429,7 +752,7 @@ export class DreamAudio {
     this.boxGain.connect(this.reverb);
     src.start();
 
-    this.humPan = ctx.createStereoPanner();
+    this.humPan = this.panner();
     this.humGain = ctx.createGain();
     this.humGain.gain.value = 0;
     const tremolo = ctx.createGain();
@@ -454,21 +777,41 @@ export class DreamAudio {
     tremolo.connect(this.humPan).connect(this.humGain).connect(this.master);
   }
 
-  step(): void {
+  /**
+   * The dreamer's own footstep: a recording for the surface (two, where one lies under
+   * another), or a burst of noise at about the right pitch until the recordings have loaded.
+   */
+  step(f: Footfall = PLAIN_STEP, force = 1): void {
     const ctx = this.ctx;
     if (!ctx) return;
+    if (this.bank?.steps) {
+      // left foot, right foot
+      this.foot = 1 - this.foot;
+      if (this.footPans.length === 0) {
+        for (const side of [-1, 1]) {
+          const p = ctx.createStereoPanner();
+          p.pan.value = side * 0.14;
+          p.connect(this.master);
+          this.footPans.push(p);
+        }
+      }
+      const pan = this.footPans[this.foot];
+      this.sample(f.set, f.gain * force, f.tone, pan, STEP_ECHO[f.set]);
+      if (f.under) this.sample(f.under, f.gain * force * (f.mix ?? 0.5), undefined, pan, STEP_ECHO[f.under]);
+      return;
+    }
     const t = ctx.currentTime;
     const n = ctx.createBufferSource();
     n.buffer = this.noise;
     n.playbackRate.value = 0.6 + Math.random() * 0.3;
-    const f = ctx.createBiquadFilter();
-    f.type = 'bandpass';
-    f.frequency.value = 600 + Math.random() * 300;
-    f.Q.value = 1.2;
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.value = STEP_HZ[f.set] * (0.85 + Math.random() * 0.4);
+    band.Q.value = 1.2;
     const g = ctx.createGain();
-    g.gain.setValueAtTime(0.09, t);
+    g.gain.setValueAtTime(0.09 * f.gain * force, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
-    n.connect(f).connect(g);
+    n.connect(band).connect(g);
     g.connect(this.master);
     g.connect(this.reverb);
     n.start(t, Math.random());

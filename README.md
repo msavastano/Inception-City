@@ -8,7 +8,7 @@
 
 Inception City is an endless, procedurally generated Paris printed on a sheet of fabric. Every street is a hinge. Grab the city and fold it until whole districts hang upside down in the sky, then drop to street level and walk up the curl and onto the ceiling, because in a dream gravity follows the street. Ride a folding street up over the city, or step into the hotel corridor that turns like a barrel. Fold too hard and the dream's projections turn to stare at you. Go deeper and time stretches, snow falls, and in Limbo the city crumbles into the sea.
 
-It runs in any modern browser with WebGL 2, on desktop and on phones. Nothing is downloaded but code: every facade, cobble, cloud and sound is generated from a seed. (The one thing not made here is how people move: a few free animation clips packed into the code, see [ASSETS.md](ASSETS.md).)
+It runs in any modern browser with WebGL 2, on desktop and on phones. Every facade, cobble and cloud is generated from a seed, and so is the drone under it all. (Two things are not made here: how people move, a few free animation clips packed into the code, and under a megabyte of free recordings for the rain, the birds, the sea and the footsteps. See [ASSETS.md](ASSETS.md).)
 
 | Walking towards a fold | Walking up the curl |
 | --- | --- |
@@ -99,6 +99,7 @@ The short version: **everything is simulated on the flat sheet, and folding happ
 - **The café explosion.** At zero stability a blast wave runs through the building shader, cracking each wall into cells and opening some of them onto the rooms behind, while a few thousand instanced shards leave the same walls at the same moments. The dream's clock then runs at about a sixth of real time, but the dreamer keeps real time. See [`src/world/collapse.ts`](src/world/collapse.ts).
 - **One exception to the rule.** Inside the rotating hallway, gravity points at the real ground. The dreamer is simulated in the corridor's own spinning frame, with friction that holds until the floor tilts past about 31°, and the camera's up eases toward whichever wall is underfoot. See [`src/world/hallway.ts`](src/world/hallway.ts).
 - **People.** The dreamer and the crowd share one skeleton and a handful of walking, running and standing clips (free CC0 motion data, [ASSETS.md](ASSETS.md)). Their bodies and clothes are built in code on that skeleton. The dreamer is one skinned mesh; the whole crowd is another, drawn in one call: each pedestrian is an instance that picks its clothes from the pieces in the mesh, its colours and build from a few numbers, and its pose from a texture that holds every clip's bones frame by frame. Every clip moves on by the ground its walker covers, so feet stay where they land. See [`src/people/`](src/people) and section 5.9 of the city plan.
+- **Sound.** Under the generated drone each level has its own air, mixed from where you stand: a far rumble of traffic and birds near the parks in the City, rain that moves onto the awnings when you step under them, wind in the Snow, the sea in Limbo, a hum in the hallway. Footsteps follow what is underfoot (flagstones, tarmac, gravel, grass, snow, puddles, the pond, the hallway's carpet and its panelling), read on the CPU from the same layout rules the ground shader paints from. The crowd murmurs from where it actually stands and hushes when it turns to stare and rises when it gives chase; its nearest footsteps, the heist's music box and the sleep machine's hum are placed around your head, so they can be found by ear. The recordings are CC0 ([ASSETS.md](ASSETS.md)), about 830 kB of Opus, loaded only when first needed. See [`src/fx/audio.ts`](src/fx/audio.ts), [`src/fx/soundscape.ts`](src/fx/soundscape.ts) and section 5.10 of the city plan.
 - **Adaptive quality.** Four tiers trade resolution, shadows, bloom, the wet-street mirror, view distance and crowd size, chosen from the device and adjusted to hold the frame rate.
 
 The [city plan](docs/CITY_PLAN.md) covers the districts, the rules of the dream, the full fold algebra, the scaling strategy and the roadmap (multiplayer through a shared fold log, WebGPU and WebXR).
@@ -108,13 +109,16 @@ The [city plan](docs/CITY_PLAN.md) covers the districts, the rules of the dream,
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm test             # fold algebra, generator, hallway, mirror, café explosion, lighting-layout and people tests
+npm test             # fold algebra, generator, hallway, mirror, café explosion, lighting-layout, people and sound tests
 npm run build        # static site in dist/
 npm run build:single # one self-contained HTML file in dist-single/
 npm run bench        # screenshots of eight fixed views per quality tier, in bench/ (needs Playwright)
+npm run listen       # a recording of the game's sound, scene by scene, in listen/ (needs Playwright)
 ```
 
 `npm run bench` is for judging changes to the look: run it on a build before and after, then `node scripts/bench.mjs --compare before after --out compare` puts the two sets side by side. It also prints draw calls, triangles and render-target memory for each view. Playwright is not a dependency of the game; install it with `npm i -D playwright && npx playwright install chromium` when you want the bench.
+
+`npm run listen` is the same idea for the ears: after `npm run build` it plays a headless copy of the game through nine scenes (a street by day and by night, the Circus, a crowd, the Rain, the Snow, Limbo, the hallway, the Architect's height), records what comes out of the speakers into `listen/reel.webm`, cuts each scene out as an `.mp3` if `ffmpeg` is installed, and prints each scene's level and which beds were playing. `--scenes rain,hall` picks scenes and `--no-drone` leaves the drone out, to hear the recordings alone.
 
 While `npm run dev` is running, `/lab.html` shows the people on their own, out of the city: `#clip=jog` plays a clip on the dreamer, `#sheet` turns him round, `#cast` lines the crowd up as the city draws it. It is a workbench for [`src/people/`](src/people) and is not part of the build.
 
@@ -130,10 +134,10 @@ src/
   people/  the shared skeleton and its clips, bodies and clothes built in code, the dreamer's figure, the instanced crowd
   modes/   architect, dream walk, riding the fold, dreamscape presets
   game/    Heist mode: the job's rules, and its sleep machines, kicks, totem and target
-  fx/      GPU picking, procedural audio, post-processing, the wet-street mirror, lamp halos
+  fx/      GPU picking, audio (the generated drone, the soundscape mixer, the packed recordings), post-processing, the wet-street mirror, lamp halos
   ui/      styles and the HUD totem
-tests/     fold, generator, hallway, ride, mirror, café explosion, Heist mode, lighting-layout and people tests
-scripts/   the single-file build, the screenshot bench and the animation packer
+tests/     fold, generator, hallway, ride, mirror, café explosion, Heist mode, lighting-layout, people and sound tests
+scripts/   the single-file build, the screenshot bench, the listening bench, and the animation and sound packers
 docs/      the city plan and screenshots
 ```
 

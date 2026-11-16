@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BLOCK, streetHalfWidth } from '../core/config';
 import { Fold, foldPoint } from '../core/fold';
+import { hallFooting } from '../fx/soundscape';
 import { DreamerBody, stridePhaseRate } from '../world/dreamer';
 import { HALL_LENGTH, Hallway } from '../world/hallway';
 import { CHASE, boomFollow, clearance } from './chase';
@@ -378,6 +379,12 @@ export class DreamWalk {
     outQ.setFromRotationMatrix(this.m);
   }
 
+  /** The sound of a foot coming down: on the hallway's carpet or panelling, or on whatever the street is made of here. */
+  private footfall(force: number): void {
+    const rider = this.ctx.hallway.rider;
+    this.ctx.audio.step(rider ? hallFooting(rider.face) : this.ctx.footing(this.x, this.z), force);
+  }
+
   update(dt: number): void {
     if (!this.active) return;
     const k = this.keys;
@@ -399,7 +406,7 @@ export class DreamWalk {
       const out = hall.step(dt, f, s, speed, jump, this.yaw - hall.axisYaw);
       if (hall.landed) {
         hall.landed = false;
-        this.ctx.audio.step();
+        this.footfall(1.4);
       }
       const fab = hall.riderFabric();
       if (fab) {
@@ -439,7 +446,7 @@ export class DreamWalk {
         if (this.h <= 0) {
           this.h = 0;
           this.vh = 0;
-          this.ctx.audio.step();
+          this.footfall(1.5);
         }
       }
       moving = Math.hypot(this.vx, this.vz);
@@ -463,7 +470,8 @@ export class DreamWalk {
       const before = Math.floor(this.stepPhase / Math.PI);
       // the stride clock turns with the ground covered, so the body's feet land where the steps are heard
       this.stepPhase += dt * stridePhaseRate(moving);
-      if (Math.floor(this.stepPhase / Math.PI) !== before) this.ctx.audio.step();
+      // a stroll is quiet, a sprint lands hard
+      if (Math.floor(this.stepPhase / Math.PI) !== before) this.footfall(Math.min(1.3, 0.6 + (0.4 * moving) / WALK));
     }
     this.bob = grounded ? Math.abs(Math.sin(this.stepPhase)) * 0.06 * Math.min(1, moving / WALK) : 0;
     // the world rushes past while a fold carries you

@@ -152,7 +152,7 @@ The rules live in `src/game/heist.ts` with no rendering in them, so `tests/heist
 
 ## 5. How it is built
 
-The stack is TypeScript, Three.js (WebGL 2) and Vite, with Vitest for the maths. There are no textures and no models to download. Every brick, window, awning, cobble, cloud and sound is generated in code from the seed.
+The stack is TypeScript, Three.js (WebGL 2) and Vite, with Vitest for the maths. There are no textures and no models to download. Every brick, window, awning, cobble and cloud is generated in code from the seed, and so is the drone under everything. The two exceptions are the people's animation clips (5.9) and under a megabyte of recorded sound (5.10), both CC0 and listed in `ASSETS.md`.
 
 ### 5.1 The key idea: fabric space and world space
 
@@ -281,6 +281,30 @@ Before and after, from the bench (Medium, the same seed and view):
 
 ![Behind the dreamer, before and after](images/people/run-medium.jpg)
 
+### 5.10 Sound
+
+Two kinds of sound are layered. The drone (tuned to each level), the rumble of a folding city, the BRAAAM, the kick, the wind and the heist's music box are made from oscillators and noise, as before. Over them are recordings: a bed of air for each level, the crowd's murmur, and footsteps.
+
+- **The recordings are CC0 and small.** `scripts/pack-sounds.mjs` downloads thirteen public-domain recordings (the list, with authors, is in `ASSETS.md`), cuts and filters them, brings them to one loudness and writes eight mono Ogg Opus files into `src/fx/sounds/`: about 830 kB against a budget of 1.5 MB, which a test enforces. The single-file build carries them as data inside the page. Each is fetched and decoded the first time it is needed, so the Rain's rain costs nothing until it rains, and a browser that cannot decode Opus keeps the generated sound and a generated footstep.
+- **Loops are closed after decoding.** A lossy codec does not promise that a file's last sample runs on into its first. So every looping file holds its loop and then a few seconds more, and the game fades that tail back in over the loop's start (equal power). The seam is then the recording running on as it really did.
+- **What is heard where is plain arithmetic** (`src/fx/soundscape.ts`, no Web Audio in it, so it is tested). A scene is a dozen numbers: the level's rain, snow and Limbo, the hour, whether the ears are on the street or up at the Architect's camera and how high, whether they are in the hallway, how far under an awning, how much green is near, how close the sea. `mixBeds` turns it into a loudness and a low-pass for each of seven beds.
+
+| Where | What is under the drone |
+| --- | --- |
+| Level 1, the City | a far rumble of traffic beyond the rooftops; birds by day, more of them near parks, the Circus lawn and the boulevards' trees |
+| Level 2, the Rain | rain; against a facade it moves onto the awnings overhead and gets lower and closer |
+| Level 3, the Snow | wind, and the city almost gone |
+| Limbo | the sea, louder towards the shore |
+| The hallway | a hum; everything outside is muffled to a third |
+| The Architect's height | the street falls away with altitude and the wind takes over |
+
+- **Footsteps follow the surface.** The ground is painted by a shader, so nothing in the scene says "this is grass". `src/city/surface.ts` reads the same layout rules on the CPU: roadway or sidewalk, the Circus's rings, a park's lawn, gravel paths, pond and its stone rim. `footing` then picks from eight sets of recorded steps for the dream as well as the ground: stone (duller on tarmac), gravel, grass, the same with a splash under it in the Rain, snow over everything in the Snow (with stone showing through on the ploughed roads), water in the pond and where Limbo's sea has come in, carpet on the hallway's floor and wood on its walls and ceiling. Each step picks a take it did not just use and varies a little in pitch and loudness. There is no metal underfoot anywhere in the city, so there are no metal steps.
+- **The crowd is heard where it stands.** The people nearest the listener are boiled down to three murmuring groups, one for each third of the compass, each standing at the centre of its people and as loud as they are many and near. The murmur itself is one short recording of a few voices layered fourteen times, slowed, until no word survives. It hushes when the projections stop to stare and rises and brightens when they give chase. The footsteps of the nearest walkers are played from where their feet land, on the beat of their own animation (5.9).
+- **Placed around the head.** The murmuring groups, other people's footsteps, the heist's music box and the sleep machine's hum each go through an HRTF panner, with headphones in mind: the music box can be found by turning your head. The panners carry direction only; loudness over distance is worked out by the caller, which knows about folds and walls. On Low quality they fall back to plain left-right panning, which costs almost nothing.
+- **Slow motion** lowers the beds' pitch and takes their top off along with the drone's, and a fade between dreams fades them with the picture.
+
+`tests/sound.test.ts` pins the surface reader against the layout, each level's bed, the footstep for each surface and dream, the crowd's voices, the direction maths, the loop seam, the size of the recordings and their credits. `npm run listen` (`scripts/listen.mjs`) is the listening bench: a headless copy of the game played through nine scenes and recorded, with a table of levels. The recordings were chosen and balanced with it, from descriptions, spectrograms and measurements; a pair of ears is still the better judge, and every level is one number at the top of `src/fx/audio.ts`.
+
 ## 6. Scaling
 
 The goal is a city that is effectively infinite, foldable in real time, and still smooth on a phone. Each of the decisions below exists to keep one cost constant as the city grows.
@@ -309,7 +333,7 @@ The result is about eleven draw calls for the whole city, whether it has two tho
 
 ### 6.5 No textures
 
-All surface detail comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, the rooms behind the windows, snow cover, puddles and raindrop ripples, crosswalks, park paths, lamp pools, contact shadows (5.8), glowing crease lines and the glowing lattice on the underside of a fold. The build ships no image assets at all. The whole app, including the 3D engine and the people's packed animation (5.9), is about 930 kB of JavaScript (about 285 kB gzipped).
+All surface detail comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, the rooms behind the windows, snow cover, puddles and raindrop ripples, crosswalks, park paths, lamp pools, contact shadows (5.8), glowing crease lines and the glowing lattice on the underside of a fold. The build ships no image assets at all. The whole app, including the 3D engine and the people's packed animation (5.9), is about 940 kB of JavaScript (about 290 kB gzipped), beside about 830 kB of recorded sound (5.10) that is fetched as it is needed.
 
 ### 6.6 Bounded fold cost
 
@@ -363,8 +387,11 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 ### Milestone 1.6: light and air (done)
 - Computed contact shadows, haze that takes the sky's colour and hides the city's edge, lamp light and halos at night, a neutral tone curve with every dial in one place, and a screenshot bench for judging changes like these (5.8)
 
-### Milestone 1.7: people (this release)
+### Milestone 1.7: people (done)
 - The dreamer as a skinned man in a suit who really walks, runs and jumps, and a crowd of varied pedestrians (suits, long coats, dresses, hats, briefcases) who walk, stand, turn to stare and run, all in one draw call, on free CC0 animation (5.9)
+
+### Milestone 1.8: sound (this release)
+- Recorded air for each level and the hallway, footsteps that follow the surface and the weather, a crowd that murmurs from where it stands, and the heist's kick and sleep machine placed around the head, all from CC0 recordings under a megabyte, with a listening bench for judging changes like these (5.10)
 
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
@@ -410,7 +437,13 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/modes/` | Architect controls, Dream Walk controls, presets, the ride fold (`ride.ts`), the third-person camera boom (`chase.ts`) |
 | `src/game/heist.ts` | Heist mode's rules: the topside clock, health, Limbo, placement and the kicks |
 | `src/game/marks.ts` | Heist mode's things in the city: sleep machine, gramophone, totem, target and their beams |
-| `src/fx/` | GPU picking, procedural audio, post-processing, the wet-street mirror (`reflection.ts`), lamp halos (`halos.ts`) |
+| `src/fx/` | GPU picking, post-processing, the wet-street mirror (`reflection.ts`), lamp halos (`halos.ts`) |
+| `src/fx/audio.ts` | Sound: the generated drone, rumble, BRAAAM and beacons, and the player for the recorded beds, footsteps and crowd |
+| `src/fx/soundscape.ts` | What should be heard where: the bed mix for a scene, the footstep for a surface, the crowd's voices, the loop seam |
+| `src/fx/soundbank.ts`, `src/fx/sounds/` | The packed CC0 recordings (see `ASSETS.md`) and their lazy loader |
+| `src/city/surface.ts` | What is underfoot at a point of the fabric, read on the CPU from the ground painter's rules |
+| `scripts/pack-sounds.mjs` | Downloads, cuts, levels and encodes the recordings into `src/fx/sounds/` |
+| `scripts/listen.mjs` | The listening bench: the game's sound recorded scene by scene, with levels |
 | `scripts/bench.mjs` | The screenshot bench: eight seeded views per quality tier, with draw calls, triangles and memory |
 | `src/ui/` | Styles and the HUD totem |
-| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror, café explosion, Heist mode, third-person camera, lighting-layout and people tests |
+| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror, café explosion, Heist mode, third-person camera, lighting-layout, people and sound tests |

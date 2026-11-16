@@ -82,11 +82,12 @@ describe('what the shaders assume about the street furniture', () => {
 describe('the look dials', () => {
   it('reads overrides from the link and ignores nonsense', () => {
     const before = { ...LOOK };
-    readLook(new URLSearchParams('tone=agx&ao=0.5&haze=2&glow=-3&contrast=abc&exposure='));
+    readLook(new URLSearchParams('tone=agx&ao=0.5&haze=2&glow=-3&relief=1.5&contrast=abc&exposure='));
     expect(LOOK.tone).toBe('agx');
     expect(LOOK.ao).toBe(0.5);
     expect(LOOK.haze).toBe(2);
     expect(LOOK.glow).toBe(0);
+    expect(LOOK.relief).toBe(1.5);
     expect(LOOK.contrast).toBe(before.contrast);
     expect(LOOK.exposure).toBe(before.exposure);
     readLook(new URLSearchParams('tone=technicolor'));

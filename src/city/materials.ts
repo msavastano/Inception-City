@@ -8,6 +8,7 @@ import {
   BUILDING_FRAG_EMISSIVE,
   BUILDING_FRAG_HEAD,
   BUILDING_FRAG_METAL,
+  BUILDING_FRAG_NORMAL,
   BUILDING_FRAG_ROUGH,
   BUILDING_VERT_HEAD,
   GROUND_FRAG_COLOR,
@@ -68,6 +69,8 @@ export const U = {
   uShatter: { value: new THREE.Vector4(0, 0, 9.8, 0) },
   // The lighting pass (src/world/look.ts): ambient occlusion strength, night glow strength, unused, unused.
   uLook: { value: new THREE.Vector4(1, 1, 0, 0) },
+  // The walls' relief (set per quality tier in src/app.ts): depth of the window reveals, strength of the bumps, where the reveals start and finish fading (metres).
+  uRelief: { value: new THREE.Vector4(1, 1, 30, 44) },
   // The air (src/world/atmosphere.ts). The sky's colours are written by the Environment.
   uHaze: { value: new THREE.Vector4(0.001, 0.001, 1 / 40, 0.1) },
   uSkyTop: { value: new THREE.Color() },
@@ -92,6 +95,7 @@ const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [s
       ['#include <color_fragment>', BUILDING_FRAG_COLOR],
       ['#include <roughnessmap_fragment>', BUILDING_FRAG_ROUGH],
       ['#include <metalnessmap_fragment>', BUILDING_FRAG_METAL],
+      ['#include <normal_fragment_maps>', BUILDING_FRAG_NORMAL],
       ['#include <emissivemap_fragment>', BUILDING_FRAG_EMISSIVE],
       ['#include <aomap_fragment>', BUILDING_FRAG_AO],
     ],

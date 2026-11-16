@@ -51,6 +51,14 @@ const VIEWS = [
   { id: 'overhead', extra: true, note: 'Under the Paris Fold, looking up at its far edge', level: 1, folds: PARIS, at: [10.2, 60, 0, 0.75] },
   { id: 'night-fold', extra: true, note: 'The Paris Fold at night', level: 1, time: 1, folds: PARIS, cam: { pos: [0, 22, -150], target: [0, 78, 250] } },
   { id: 'courtyard', extra: true, note: 'Level 1, looking down into the blocks', level: 1, cam: { pos: [150, 120, -40], target: [96, 0, 60] } },
+  { id: 'facade', extra: true, note: 'A sunlit Haussmann front from across the street', level: 1, at: [18, 58.5, 0.25, 0.22] },
+  { id: 'windows', extra: true, note: 'Along a sunlit Haussmann front from its own sidewalk', level: 1, at: [5, 68, 1.05, 0.3] },
+  { id: 'brick', extra: true, note: 'A sunlit old-town brick front', level: 1, at: [-86, 123, 0.2, 0.2] },
+  { id: 'concrete', extra: true, note: 'A sunlit concrete front with ribbon windows', level: 1, at: [-290, -134, 0.2, 0.2] },
+  { id: 'glass', extra: true, note: 'The foot of a glass tower', level: 1, at: [-150, 318, 0.15, 0.4] },
+  { id: 'facade-night', extra: true, note: 'The same Haussmann front at midnight', level: 1, time: 1, at: [18, 58.5, 0.25, 0.22] },
+  { id: 'roofline', extra: true, note: 'A cornice, a mansard and its dormers from across the street', level: 1, cam: { pos: [6, 30, 56], target: [22, 25, 74] } },
+  { id: 'blast', extra: true, note: 'The café explosion, three seconds in', level: 1, at: [18, 58.5, 0.25, 0.22], blast: 1.5 },
   { id: 'third', extra: true, note: 'Behind the dreamer on a street', level: 1, third: true, at: [69.5, -120, 0, 0.06] },
   { id: 'behind-circus', extra: true, note: 'Behind the dreamer, crossing the Circus', level: 1, third: true, at: [-9, -62, 0.12, 0.16], keys: ['KeyW'], frames: 34, phase: 0.3 },
   {
@@ -153,6 +161,11 @@ function shoot(v) {
     // bring the crowd in around the walker (they are spread over many blocks otherwise)
     d.crowd.opts.spread = v.gather;
     d.crowd.scatter(v.at[0], v.at[1], 5);
+  }
+  if (v.blast) {
+    // stability hits zero: let the wave run for a while before the shot
+    d.blowUp();
+    d.step(Math.round(v.blast / 0.05), 0.05, false);
   }
   if (v.keys || v.gather) {
     // let things move: keys held down for the walker, time for the crowd, at a real frame rate

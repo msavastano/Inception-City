@@ -218,7 +218,7 @@ Walk past a lit window and you see into a room: back wall, side walls, floor and
 
 Folding is no obstacle. The vertex shader carries the fabric axes through the same fold rotations as the normal, so it can hand the fragment shader the view ray expressed in fabric space, where every building is still an axis-aligned box. A room on a curled street looks right from the street below it.
 
-Every choice (which rooms are lit, which have a television on, the wallpaper, the furniture) comes from hashing the room's id and the building's seed. Interpolation would wobble the seed's last bits and the hashes would turn that into speckle, so per-building values are passed as `flat` varyings. Once a window is only a few pixels wide the room fades back to the flat warm pane it was before.
+Every choice (which rooms are lit, which have a television on, the wallpaper, the furniture) comes from hashing the room's id and the building's seed. Interpolation would wobble the seed's last bits and the hashes would turn that into speckle, so per-building values are passed as `flat` varyings. Once a window is only a few pixels wide the room fades back to the flat warm pane it was before. Close to, the glass the room is seen through sits back in its wall (5.11).
 
 ### 5.6 Wet streets
 
@@ -305,6 +305,27 @@ Two kinds of sound are layered. The drone (tuned to each level), the rumble of a
 
 `tests/sound.test.ts` pins the surface reader against the layout, each level's bed, the footstep for each surface and dream, the crowd's voices, the direction maths, the loop seam, the size of the recordings and their credits. `npm run listen` (`scripts/listen.mjs`) is the listening bench: a headless copy of the game played through nine scenes and recorded, with a table of levels. The recordings were chosen and balanced with it, from descriptions, spectrograms and measurements; a pair of ears is still the better judge, and every level is one number at the top of `src/fx/audio.ts`.
 
+### 5.11 Walls with depth
+
+The buildings are boxes, and for a long time their windows were paint: fine from the air, stickers from the pavement. Real walls have thickness. The glass sits back in its opening, stone stands out in bands and ledges, and the sun picks all of it out. None of that needs geometry, because the facade painter already knows three things at every pixel: where the pixel is on the wall, where the eye is, and where the sun is.
+
+- **Window reveals.** The room trace of 5.5 used to start on the wall's face. Now the line of sight is followed in from the face for the depth of the reveal (25 cm on a Haussmann front, less on brick, concrete and the shopfronts, 7 cm behind a curtain wall's mullions). Either it meets a side of the opening first, and the pixel is the reveal's stone: a jamb facing across the opening, a sill facing up, a lintel facing down. Or it reaches the glass, further along than where it went in, and the room trace starts from there, which is what makes the window shift against its opening as you walk past. On the glass stand the frame and its glazing bars.
+- **The sun on the reveal.** A reveal's face is lit like any other surface, by its own normal: the jamb that faces the sun is bright, the lintel is dark. Whether the opposite edge of the opening shades a point is one more similar-triangles step, towards the sun this time: from the point back out to the wall's face, and a test of whether that lands inside the opening. The same step throws the wall's shadow across the glass, its frame and the curtains behind it, which by day and close to are lit as cloth in the daylight instead of as a dark glow.
+- **Ledges and their shadows.** The cornice, the string course under each floor, the balconies' slabs, the shop awnings and brick window sills stand out from the wall by a known reach, so the wall under each is in shadow for that reach times the sun's height over the wall. That is one multiply and one smoothstep per ledge. These shadows last as long as the pattern itself does (6.4), so a sunlit Haussmann front carries the lines under its balconies from across the square.
+- **Joints and mouldings.** The same patterns that paint stone courses, brick bonding, cast panels and slates also say how the surface leans: across a joint, round a string course, under a cornice, along the bevel of a window surround. The lean turns the normal the light falls on. A joint narrower than a few pixels is not carved at all, because a bump that fine only sparkles.
+- **How it reaches the light.** The painter works in the wall's own axes (along it, up it, out of it), found from screen derivatives of the position and of the wall's own coordinates, so it holds on a curled street too. The turned normal is handed to the standard lighting; the sun's direct light is then multiplied by the relief's shadows after the lights are summed, which is safe because the sun (the moon, at night) is the only light with a direction. At night a lit room spills a little of its light onto its own reveal.
+- **What it costs.** No draw calls, no triangles, no textures and no render targets: the bench's numbers do not move. Per pixel it is a handful of multiplies, and the pixels that land on a reveal skip the room trace altogether. Reveals, frames and the cloth fade out between about 27 and 38 m on Medium (34 to 48 m on High), by shrinking the reveal's depth to nothing, so nothing pops. Low draws the walls flat, as before. A café-explosion hole is cut through the wall's face, so it ignores the reveal and opens straight onto its room.
+
+`#relief=` scales the lot from the link (0 is flat walls, 1 the default, 2 for deep-set windows).
+
+Before and after, from the bench (Medium, the same seed and view):
+
+![A sunlit Haussmann front from across the street, before and after](images/walls-with-depth/facade-medium.jpg)
+
+![Along the same block from its own sidewalk, before and after](images/walls-with-depth/windows-medium.jpg)
+
+![An old-town brick front, before and after](images/walls-with-depth/brick-medium.jpg)
+
 ## 6. Scaling
 
 The goal is a city that is effectively infinite, foldable in real time, and still smooth on a phone. Each of the decisions below exists to keep one cost constant as the city grows.
@@ -327,13 +348,13 @@ The result is about eleven draw calls for the whole city, whether it has two tho
 
 - **Ground tiles** come in two tessellations. Only chunks crossed by a curl get the fine 40 × 40 grid needed to bend smoothly. Everywhere else a 2 × 2 tile is enough.
 - **Props** (trees and lamps) are only written for chunks inside a smaller ring around the viewer, with their own budget per frame.
-- **Facades** fade their window pattern to its average colour once a window is only a few pixels wide, which removes moiré without textures or mipmaps. The rooms behind the windows are only traced while a window is big enough on screen to show one.
+- **Facades** fade their window pattern to its average colour once a window is only a few pixels wide, which removes moiré without textures or mipmaps. The rooms behind the windows are only traced while a window is big enough on screen to show one, and the window reveals, frames and carved joints (5.11) only within a few dozen metres.
 - **The crowd** is a single instanced mesh of skinned people (5.9). Its size follows the quality tier, from 180 to 900 people, and only those within 110 m are drawn into the shadow map.
 - **The café explosion** throws between 1,600 (Low) and 7,000 (Ultra) shards, all in one instanced mesh that is hidden the rest of the time. The building shader's blast branch costs one uniform test per pixel while the dream holds.
 
 ### 6.5 No textures
 
-All surface detail comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, the rooms behind the windows, snow cover, puddles and raindrop ripples, crosswalks, park paths, lamp pools, contact shadows (5.8), glowing crease lines and the glowing lattice on the underside of a fold. The build ships no image assets at all. The whole app, including the 3D engine and the people's packed animation (5.9), is about 940 kB of JavaScript (about 290 kB gzipped), beside about 830 kB of recorded sound (5.10) that is fetched as it is needed.
+All surface detail comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, the rooms behind the windows, snow cover, puddles and raindrop ripples, crosswalks, park paths, lamp pools, contact shadows (5.8), window reveals and the shadows under ledges (5.11), glowing crease lines and the glowing lattice on the underside of a fold. The build ships no image assets at all. The whole app, including the 3D engine and the people's packed animation (5.9), is about 940 kB of JavaScript (about 290 kB gzipped), beside about 830 kB of recorded sound (5.10) that is fetched as it is needed.
 
 ### 6.6 Bounded fold cost
 
@@ -341,14 +362,14 @@ Fold state is two arrays of eight vec4 uniforms. Every vertex pays for at most e
 
 ### 6.7 Adaptive quality
 
-Four tiers (low, medium, high, ultra) set pixel ratio, shadow map size and extent, bloom, the wet-street mirror's resolution, view distance, prop distance, chunk cap and crowd size. The app starts from a guess based on the device and then watches the frame rate, stepping down a tier when it drops below about 38 fps and back up (as far as High) when it holds above 57 fps. Ultra is opt-in from the panel, and `#q=` in the URL pins any tier.
+Four tiers (low, medium, high, ultra) set pixel ratio, shadow map size and extent, bloom, the wet-street mirror's resolution, how far the window reveals reach, view distance, prop distance, chunk cap and crowd size. The app starts from a guess based on the device and then watches the frame rate, stepping down a tier when it drops below about 38 fps and back up (as far as High) when it holds above 57 fps. Ultra is opt-in from the panel, and `#q=` in the URL pins any tier.
 
-| Tier | Pixel ratio | Shadows | Bloom | Wet-street mirror | View distance | Chunk cap | Crowd |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Ultra | 2 | 4096 | yes | ½ resolution | 1300 m | 150 | 900 |
-| High | 1.5 | 2048 | yes | ½ resolution | 1050 m | 120 | 600 |
-| Medium | 1 | 2048 | yes | ⅓ resolution | 820 m | 90 | 400 |
-| Low | 0.75 | off | no | lamp reflections only | 620 m | 60 | 180 |
+| Tier | Pixel ratio | Shadows | Bloom | Wet-street mirror | Window reveals | View distance | Chunk cap | Crowd |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Ultra | 2 | 4096 | yes | ½ resolution | to 64 m | 1300 m | 150 | 900 |
+| High | 1.5 | 2048 | yes | ½ resolution | to 48 m | 1050 m | 120 | 600 |
+| Medium | 1 | 2048 | yes | ⅓ resolution | to 38 m | 820 m | 90 | 400 |
+| Low | 0.75 | off | no | lamp reflections only | flat walls | 620 m | 60 | 180 |
 
 ### 6.8 State that fits in a link
 
@@ -390,8 +411,11 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 ### Milestone 1.7: people (done)
 - The dreamer as a skinned man in a suit who really walks, runs and jumps, and a crowd of varied pedestrians (suits, long coats, dresses, hats, briefcases) who walk, stand, turn to stare and run, all in one draw call, on free CC0 animation (5.9)
 
-### Milestone 1.8: sound (this release)
+### Milestone 1.8: sound (done)
 - Recorded air for each level and the hallway, footsteps that follow the surface and the weather, a crowd that murmurs from where it stands, and the heist's kick and sleep machine placed around the head, all from CC0 recordings under a megabyte, with a listening bench for judging changes like these (5.10)
+
+### Milestone 1.9: walls with depth (this release)
+- Windows set back in their walls with lit and shaded reveals, frames and glazing bars; cornices, string courses, balconies, awnings and sills that shade the wall under them; carved joints in stone, brick and concrete. All in the facade painter, with no new geometry (5.11)
 
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
@@ -417,13 +441,13 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/core/config.ts` | Grid constants, slab sizes, street widths |
 | `src/core/rng.ts` | Seeded hashing, value noise and fBm |
 | `src/city/generator.ts` | Deterministic chunk generation: blocks, lots, towers, roofs, props |
-| `src/city/shaders.ts` | GLSL: fold transform, facade painter, ground painter, props, people, picking |
+| `src/city/shaders.ts` | GLSL: fold transform, facade painter (rooms, window reveals, relief), ground painter, props, people, picking |
 | `src/city/materials.ts` | Shared uniforms and patched Three.js materials, depth and pick variants |
 | `src/city/pool.ts` | The slab allocator for instanced attributes |
 | `src/city/streamer.ts` | World-space streaming, LOD, collision and raise-brush edits |
 | `src/world/` | Sky, sun and weather, dream levels, the projections crowd |
 | `src/world/atmosphere.ts` | The sky's colour function and the haze that replaces fog in every folded material |
-| `src/world/look.ts` | The dials for the lighting pass (tone curve, ambient occlusion, haze, glow) and their link parameters |
+| `src/world/look.ts` | The dials for the look (tone curve, ambient occlusion, haze, glow, wall relief) and their link parameters |
 | `src/world/hallway.ts` | The rotating hallway: geometry, shader painter and the rider's physics |
 | `src/world/collapse.ts` | The café explosion: the shard planner, the slow-motion timeline and the automatic kick |
 | `src/world/dreamer.ts` | The dreamer's body for the third-person view: which clips to mix, the stride clock, the head turn |

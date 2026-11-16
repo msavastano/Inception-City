@@ -178,7 +178,9 @@ uniform float uSnow;
 uniform float uTime;
 uniform vec4 uBlast;   // the café explosion: centre x, z (fabric), wave front radius, strength (0 while the dream holds)
 uniform vec4 uLook;    // ambient occlusion strength, night glow strength (src/world/look.ts)
+uniform vec4 uRelief;  // the walls' relief: depth of the window reveals (0 turns all of it off), strength of the bumps, where the reveals start and finish fading (metres from the eye)
 float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float box2(vec2 p, vec2 lo, vec2 hi) { return step(lo.x, p.x) * step(p.x, hi.x) * step(lo.y, p.y) * step(p.y, hi.y); }
 
 // The room behind the window this pixel belongs to, filled in by facade().
 vec2 gPaneM;     // size of the window opening (metres)
@@ -191,6 +193,21 @@ float gRoomOn;   // brightness of the room's light, 0 when it is dark
 float gRoomKind; // 0 flat, 1 shop, 2 office, 3 attic
 float gLod;      // 1 when windows are only a few pixels wide
 
+// The wall's relief. Nothing here is geometry: the walls are flat boxes, and facade() works out
+// what a wall with depth would look like from where the pixel is, the eye is and the sun is.
+float gPx;       // metres of wall under one pixel
+float gNear;     // 1 close enough to see into the window reveals, 0 past where they have faded out
+float gSunFace;  // 1 when the sun stands in front of this wall
+vec2 gSunLean;   // per metre of depth, how far a shadow runs along the wall and down it
+float gOpen;     // 1 inside a window opening
+float gDepth;    // how far back its glass sits (metres)
+vec3 gWall;      // the wall's own colour here, for the sides of the opening
+vec4 gFrame;     // the window frame: its colour, and the width of its border (metres, 0 for none)
+vec2 gPanes;     // leaves across and panes up between its glazing bars
+vec2 gSlope;     // how the surface leans: metres out per metre along the wall, and per metre up it
+float gCast;     // 0 in the shadow of a ledge that stands out above
+float gRail;     // 1 on ironwork that stands in front of the windows
+
 void setRoom(float along, float width, float y, float height, float depth, vec2 pane, vec2 id, float on, float kind) {
   gRoom = vec2(mod(along, width), y);
   gRoomSize = vec3(width, height, depth);
@@ -198,6 +215,29 @@ void setRoom(float along, float width, float y, float height, float depth, vec2 
   gRoomId = id;
   gRoomOn = on;
   gRoomKind = kind;
+}
+
+// Detail finer than a pixel would sparkle as you walk. 1 while a line w metres wide can still be drawn, 0 once it cannot;
+// and the same for a groove that wide, which has to be a few pixels across before its two sides can be told apart.
+float fine(float w) { return 1.0 - smoothstep(0.5 * w, 1.5 * w, gPx); }
+float carved(float w) { return 1.0 - smoothstep(0.2 * w, 0.6 * w, gPx); }
+
+// The lean of the surface across a rounded joint w metres wide, x metres from its centre line.
+float joint(float x, float w) { return clamp(2.0 * x / w, -1.0, 1.0) * step(abs(x), 0.5 * w); }
+
+// A ledge standing 'reach' metres out from the wall shades what is 'below' it (metres), as far down as the sun's height says.
+void ledge(float below, float reach) {
+  float len = reach * max(gSunLean.y, 0.0);
+  if (below >= 0.0 && len > 0.0) gCast = min(gCast, smoothstep(0.75 * len - 0.01, 1.1 * len + 0.02, below));
+}
+
+// A surround standing proud of the wall for 'e' metres around an opening (position p in it, size s): the lean of its bevelled outer edge.
+vec2 surround(vec2 p, vec2 s, vec2 e) {
+  vec2 d = max(-p, p - s) - e;
+  float edge = max(d.x, d.y);
+  if (edge < -0.03 || edge > 0.0) return vec2(0.0);
+  vec2 side = sign(p - 0.5 * s);
+  return d.x > d.y ? vec2(-side.x, 0.0) : vec2(0.0, -side.y);
 }
 
 // Paints one facade cell. Returns window mask, lit amount and glassiness.
@@ -208,22 +248,32 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
   col = vColor.rgb;
   win = 0.0; lit = 0.0; glassy = 0.0; gLod = 0.0;
   gPaneM = vec2(1.0); gShade = 0.0;
+  gOpen = 0.0; gDepth = 0.0; gWall = col; gFrame = vec4(0.0); gPanes = vec2(1.0); gSlope = vec2(0.0); gCast = 1.0; gRail = 0.0;
   setRoom(0.0, 1.0, 0.0, 1.0, 1.0, vec2(0.0), vec2(0.0), 0.0, 0.0);
   litCol = mix(vec3(1.0, 0.72, 0.42), vec3(1.0, 0.9, 0.75), hash12(vec2(seed * 91.0, 3.0)));
+  // the relief is off on Low, and everything painted here has gone once the pattern itself has
+  float relief = step(0.0001, uRelief.x) * (1.0 - smoothstep(0.25, 0.7, gPx));
 
   if (style > 8.5) {
     if (style < 9.5) {
-      float course = step(0.55, fract(vLocal.y * 2.4));
+      float cy = fract(vLocal.y * 2.4);
+      float course = step(0.55, cy);
       col *= 0.86 + 0.14 * course;
       if (an.y < 0.5) {
+        // each course of slates laps over the one below, and its lower edge is in its own shade
+        gSlope.y = 0.9 * step(cy, 0.06) * carved(0.05) * relief * uRelief.y;
         float u = an.x > 0.5 ? vLocal.z : vLocal.x;
         float cell = fract(u / 3.3 + seed);
-        float dormer = step(0.36, cell) * step(cell, 0.64) * step(0.9, vLocal.y) * step(vLocal.y, 3.0) * step(2.0, vInfo.z);
+        vec2 op = vec2((cell - 0.36) * 3.3, vLocal.y - 0.9);
+        vec2 os = vec2(0.924, 2.1);
+        float dormer = box2(op, vec2(0.0), os) * step(2.0, vInfo.z);
         win = dormer;
         vec2 id = vec2(floor(u / 3.3 + seed), 99.0 + seed * 13.0);
         lit = dormer * step(hash12(id), 0.28);
-        setRoom(cell * 3.3, 3.3, vLocal.y - 0.3, 2.9, 3.6, vec2((cell - 0.36) / 0.28, (vLocal.y - 0.9) / 2.1), id, lit * 0.8, 3.0);
-        gPaneM = vec2(0.92, 2.1);
+        setRoom(cell * 3.3, 3.3, vLocal.y - 0.3, 2.9, 3.6, op / os, id, lit * 0.8, 3.0);
+        gPaneM = os;
+        gSlope.y *= 1.0 - dormer;
+        gOpen = dormer; gDepth = 0.16; gWall = col * 0.9; gFrame = vec4(0.8, 0.79, 0.75, 0.055); gPanes = vec2(2.0, 2.0);
         col = mix(col, vec3(0.92, 0.94, 0.98), uSnow * 0.85);
       } else {
         col = mix(col, vec3(0.95, 0.96, 1.0), uSnow);
@@ -246,115 +296,185 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
   float H = vInfo.w;
   // a few rooms per building are offices, whatever the facade
   float office = step(0.7, hash12(vec2(seed * 41.0, 5.0)));
+  // the opening this pixel belongs to: where the pixel is in it, and its size (metres)
+  vec2 op = vec2(0.0);
+  vec2 os = vec2(1.0);
+  vec2 roomId = vec2(0.0);
 
   if (style < 0.5) {
     // Haussmann limestone: shopfront, iron balconies, tall windows, cornice.
     float shopH = 4.6;
     float fh = 3.4;
-    float stone = 0.92 + 0.08 * hash12(floor(vec2(u * 1.6, v * 2.5)));
-    col *= stone;
+    // dressed stone in courses, every other one half a block along
+    float row = floor(v * 2.5);
+    float su = u * 1.6 + 0.5 * mod(row, 2.0);
+    col *= 0.92 + 0.08 * hash12(vec2(floor(su), row));
+    float bed = (fract(v * 2.5 + 0.5) - 0.5) / 2.5;   // metres from the nearest joint between courses
+    float perp = (fract(su + 0.5) - 0.5) / 1.6;       // and from the nearest joint between blocks
     if (v < shopH) {
       float bay = fract(u / 4.2);
-      float glass = step(0.12, bay) * step(bay, 0.88) * step(0.25, v) * step(v, 3.3);
+      op = vec2((bay - 0.12) * 4.2, v - 0.25);
+      os = vec2(3.192, 3.05);
+      float glass = box2(op, vec2(0.0), os);
       vec3 awning = vec3(0.55, 0.12, 0.1);
       float pick = hash12(vec2(floor(u / 4.2), seed * 31.0));
       if (pick > 0.66) awning = vec3(0.1, 0.3, 0.2); else if (pick > 0.33) awning = vec3(0.12, 0.16, 0.32);
-      float aw = step(3.35, v) * step(v, 4.0) * step(0.08, bay) * step(bay, 0.92);
+      float under = step(0.08, bay) * step(bay, 0.92);
+      float aw = step(3.35, v) * step(v, 4.0) * under;
+      // the ground floor is cut into deep bands
+      float band = relief * (1.0 - aw);
+      gSlope.y = 0.8 * joint(bed, 0.05) * carved(0.05) * band;
+      col *= 1.0 - 0.2 * step(abs(bed), 0.02) * fine(0.04) * band;
       col = mix(col, awning, aw);
+      // the awning slopes out over the pavement, and shades the shopfront under it
+      gSlope.y = mix(gSlope.y, -0.8 * relief, aw);
+      if (under > 0.5) ledge(3.35 - v, 0.9);
+      gWall = col;
       win = glass;
+      roomId = vec2(floor(u / 4.2), seed * 31.0);
       // shop interiors: dimmer than the flats above, brighter towards the ceiling
       lit = glass * (0.16 + 0.4 * pick) * (0.45 + 0.55 * smoothstep(0.25, 3.3, v));
-      setRoom(u, 4.2, v, 4.0, 6.5, vec2((bay - 0.12) / 0.76, (v - 0.25) / 3.05), vec2(floor(u / 4.2), seed * 31.0), 0.3 + 0.5 * pick, 1.0);
-      gPaneM = vec2(3.19, 3.05);
+      setRoom(u, 4.2, v, 4.0, 6.5, op / os, roomId, 0.3 + 0.5 * pick, 1.0);
+      gDepth = 0.2; gFrame = vec4(0.1, 0.1, 0.11, 0.07); gPanes = vec2(2.0, 1.0);
       // the awning throws its shade down the top of the shop window
-      gShade = step(0.08, bay) * step(bay, 0.92) * smoothstep(2.3, 3.35, v) * step(v, 3.35);
+      gShade = under * smoothstep(2.3, 3.35, v) * step(v, 3.35);
       col = mix(col, vec3(0.08, 0.08, 0.09), glass);
     } else {
       float level = floor((v - shopH) / fh);
       float fv = fract((v - shopH) / fh) * fh;
       float cu = fract(u / 3.0);
-      float w = step(0.3, cu) * step(cu, 0.72) * step(0.55, fv) * step(fv, 2.75);
+      op = vec2((cu - 0.3) * 3.0, fv - 0.55);
+      os = vec2(1.26, 2.2);
+      float w = box2(op, vec2(0.0), os);
       // continuous wrought-iron balconies on the 2nd and 5th floors
-      float balcony = (level == 1.0 || level == 4.0) ? step(0.38, fv) * step(fv, 0.85) * (0.6 + 0.4 * step(0.5, fract(u * 3.0))) : 0.0;
-      float cornice = step(H - 0.8, v) * step(v, H - 0.3) + step(fh - 0.25, fv) * step(fv, fh) * 0.4;
-      col = mix(col, col * 1.08, cornice);
+      bool railed = level == 1.0 || level == 4.0;
+      gRail = railed ? step(0.38, fv) * step(fv, 0.85) * (0.6 + 0.4 * step(0.5, fract(u * 3.0))) : 0.0;
+      float top = step(H - 0.8, v) * step(v, H - 0.3);
+      float course = step(fh - 0.25, fv);
+      col = mix(col, col * 1.08, top + course * 0.4);
+      // fine joints in the dressed stone
+      float ashlar = relief * (1.0 - top) * (1.0 - course);
+      gSlope = 0.6 * vec2(joint(perp, 0.022), joint(bed, 0.022)) * carved(0.022) * ashlar;
+      col *= 1.0 - 0.1 * max(step(abs(perp), 0.011), step(abs(bed), 0.011)) * fine(0.022) * ashlar;
+      // a raised surround frames each window
+      gSlope += 0.9 * surround(op, os, vec2(0.14)) * carved(0.06) * relief;
+      // the string course under each floor is a half-round, the cornice a deep shelf: both shade the wall beneath them
+      gSlope.y = mix(gSlope.y, 1.1 * cos(3.1416 * (fv - fh + 0.25) / 0.25) * relief, course);
+      gSlope.y = mix(gSlope.y, (v < H - 0.45 ? 1.3 : 0.0) * relief, top);
+      ledge(fh - 0.25 - fv, 0.09);
+      ledge(H - 0.8 - v, 0.45);
+      // and so do the balconies' stone slabs
+      float slab = railed ? step(0.26, fv) * step(fv, 0.38) : 0.0;
+      col = mix(col, col * 1.06, slab * relief);
+      gSlope.y = mix(gSlope.y, 0.0, slab);
+      if (railed) ledge(0.26 - fv, 0.55);
+      else if (level == 0.0 || level == 3.0) ledge(fh + 0.26 - fv, 0.55);
+      gWall = col;
       col = mix(col, vec3(0.12, 0.13, 0.14), w);
-      col = mix(col, vec3(0.06, 0.06, 0.07), balcony);
       win = w;
       // a flat is two windows wide, and its lights are on or off together
-      vec2 id = vec2(floor(u / 6.0), level) + seed * 57.0;
-      float on = hash12(id);
+      roomId = vec2(floor(u / 6.0), level) + seed * 57.0;
+      float on = hash12(roomId);
       float bright = step(on, 0.42) * (0.4 + on * 1.4);
       lit = w * bright * (0.6 + 0.4 * smoothstep(0.55, 2.75, fv));
-      setRoom(u, 6.0, fv, fh, 4.5 + 2.0 * hash12(id + 7.0), vec2((cu - 0.3) / 0.42, (fv - 0.55) / 2.2), id, bright, 0.0);
-      gPaneM = vec2(1.26, 2.2);
+      setRoom(u, 6.0, fv, fh, 4.5 + 2.0 * hash12(roomId + 7.0), op / os, roomId, bright, 0.0);
+      gDepth = 0.25; gFrame = vec4(0.8, 0.79, 0.75, 0.06); gPanes = vec2(2.0, 3.0);
     }
   } else if (style < 1.5) {
-    // Glass curtain wall.
+    // Glass curtain wall: the glass sits a little behind its mullions.
     float fh = 3.9;
     float level = floor(v / fh);
     float fv = fract(v / fh) * fh;
-    float mul = step(0.06, fract(u / 1.6)) * step(fract(u / 1.6), 0.94);
-    float spandrel = step(fv, 0.7);
-    win = mul * (1.0 - spandrel);
+    op = vec2((fract(u / 1.6) - 0.06) * 1.6, fv - 0.7);
+    os = vec2(1.408, fh - 0.7);
+    win = box2(op, vec2(0.0), os);
     glassy = 1.0;
+    gWall = col * 0.55;
     col = mix(col * 0.55, col * 0.35, win);
-    vec2 id = vec2(floor(u / 6.4), level) + seed * 13.0;
-    float on = hash12(id);
+    roomId = vec2(floor(u / 6.4), level) + seed * 13.0;
+    float on = hash12(roomId);
     float bright = step(on, 0.33) * (0.4 + on * 1.8);
     lit = win * bright;
     litCol = mix(litCol, vec3(0.75, 0.88, 1.0), 0.6);
-    setRoom(u, 6.4, fv - 0.7, fh - 0.7, 8.0, vec2(fract(u / 1.6), (fv - 0.7) / (fh - 0.7)), id, bright, 2.0);
-    gPaneM = vec2(1.6, fh - 0.7);
+    setRoom(u, 6.4, fv - 0.7, fh - 0.7, 8.0, op / os, roomId, bright, 2.0);
+    gDepth = 0.07;
   } else if (style < 2.5) {
-    // Modernist concrete: ribbon windows.
+    // Modernist concrete: ribbon windows between cast panels.
     float fh = 3.6;
     float level = floor(v / fh);
     float fv = fract(v / fh) * fh;
-    float band = step(1.0, fv) * step(fv, 2.9);
-    float mul = step(0.08, fract(u / 1.8));
-    win = band * mul;
+    op = vec2((fract(u / 1.8) - 0.08) * 1.8, fv - 1.0);
+    os = vec2(1.656, 1.9);
+    win = box2(op, vec2(0.0), os);
     col *= 0.9 + 0.1 * hash12(floor(vec2(u * 0.5, v * 0.5)) + seed);
+    // the joints between the panels
+    vec2 pj = (fract(vec2(u, v) * 0.5 + 0.5) - 0.5) * 2.0;
+    gSlope = 0.7 * vec2(joint(pj.x, 0.03), joint(pj.y, 0.03)) * carved(0.03) * relief;
+    col *= 1.0 - 0.14 * max(step(abs(pj.x), 0.015), step(abs(pj.y), 0.015)) * fine(0.03) * relief;
+    gWall = col;
     col = mix(col, vec3(0.1, 0.12, 0.14), win);
-    vec2 id = vec2(floor(u / 5.4), level) + seed * 7.0;
-    float on = hash12(id);
+    roomId = vec2(floor(u / 5.4), level) + seed * 7.0;
+    float on = hash12(roomId);
     float bright = step(on, 0.35) * (0.4 + on * 1.7);
     lit = win * bright;
     if (office > 0.5) litCol = mix(litCol, vec3(0.8, 0.9, 1.0), 0.5);
-    setRoom(u, 5.4, fv, fh - 0.3, 5.5 + 2.0 * office, vec2(fract(u / 1.8), (fv - 1.0) / 1.9), id, bright, 2.0 * office);
-    gPaneM = vec2(1.8, 1.9);
+    setRoom(u, 5.4, fv, fh - 0.3, 5.5 + 2.0 * office, op / os, roomId, bright, 2.0 * office);
+    gDepth = 0.2; gFrame = vec4(0.15, 0.16, 0.17, 0.05);
   } else {
     // Old-town brick.
     float fh = 3.1;
     float level = floor(v / fh);
     float fv = fract(v / fh) * fh;
-    float course = step(0.12, fract(v * 4.0)) * (0.92 + 0.08 * hash12(floor(vec2(u * 2.0 + floor(v * 4.0) * 0.5, v * 4.0))));
+    float cy = fract(v * 4.0);
+    float bu = u * 2.0 + floor(v * 4.0) * 0.5;
+    float course = step(0.12, cy) * (0.92 + 0.08 * hash12(floor(vec2(bu, v * 4.0))));
+    // mortar between the bricks of a course too, while a brick is wide enough to see
+    float mortar = fine(0.03) * relief;
+    course *= 1.0 - step(fract(bu), 0.05) * mortar;
     col *= 0.85 + 0.15 * course;
+    gSlope = 0.55 * vec2(joint((fract(bu) - 0.025) * 0.5, 0.025), joint((cy - 0.06) * 0.25, 0.03)) * carved(0.03) * relief;
     float cu = fract(u / 2.7);
-    float w = step(0.32, cu) * step(cu, 0.68) * step(0.7, fv) * step(fv, 2.4);
-    float trim = step(0.28, cu) * step(cu, 0.72) * step(0.6, fv) * step(fv, 2.5) - w;
+    op = vec2((cu - 0.32) * 2.7, fv - 0.7);
+    os = vec2(0.972, 1.7);
+    float w = box2(op, vec2(0.0), os);
+    vec2 edge = vec2(0.108, 0.1);
+    float trim = box2(op, -edge, os + edge) - w;
     col = mix(col, vec3(0.88, 0.86, 0.8), trim);
+    // the stone trim stands proud of the brick, and its sill shades the courses under it
+    gSlope = mix(gSlope, vec2(0.0), trim) + 0.9 * surround(op, os, edge) * carved(0.06) * relief;
+    if (op.x > -edge.x && op.x < os.x + edge.x) ledge(-edge.y - op.y, 0.07);
+    // a corbelled course along the top of the wall
+    float cap = step(H - 0.36, v) * step(v, H - 0.06);
+    gSlope.y = mix(gSlope.y, (v < H - 0.2 ? 1.0 : 0.0) * relief, cap);
+    ledge(H - 0.36 - v, 0.12);
+    gWall = vec3(0.84, 0.82, 0.76);
     col = mix(col, vec3(0.1, 0.1, 0.11), w);
     win = w;
-    vec2 id = vec2(floor(u / 5.4), level) + seed * 23.0;
-    float on = hash12(id);
+    roomId = vec2(floor(u / 5.4), level) + seed * 23.0;
+    float on = hash12(roomId);
     float bright = step(on, 0.45) * (0.4 + on * 1.3);
     lit = w * bright;
-    setRoom(u, 5.4, fv, fh - 0.1, 4.0 + 1.5 * hash12(id + 3.0), vec2((cu - 0.32) / 0.36, (fv - 0.7) / 1.7), id, bright, 0.0);
-    gPaneM = vec2(0.97, 1.7);
+    setRoom(u, 5.4, fv, fh - 0.1, 4.0 + 1.5 * hash12(roomId + 3.0), op / os, roomId, bright, 0.0);
+    gDepth = 0.18; gFrame = vec4(0.82, 0.81, 0.77, 0.055); gPanes = vec2(2.0, 2.0);
   }
+  gPaneM = os;
+  gOpen = win;
   // grime towards the street
-  col *= 0.82 + 0.18 * smoothstep(0.0, 9.0, v);
+  float grime = 0.82 + 0.18 * smoothstep(0.0, 9.0, v);
+  col *= grime;
+  gWall *= grime;
   // Procedural patterns have no mipmaps: fade them to their average when a cell is only a few pixels wide.
-  float lod = smoothstep(0.25, 0.7, max(fwidth(u), fwidth(v)));
+  float lod = smoothstep(0.25, 0.7, gPx);
   vec3 avg = vColor.rgb * (style > 0.5 && style < 1.5 ? 0.42 : 0.62);
   col = mix(col, avg, lod);
   win *= 1.0 - lod * 0.6;
   lit *= 1.0 - lod * 0.5;
+  gRail *= 1.0 - lod;
+  // the glass in an opening is flat, whatever the wall around it does
+  gSlope *= uRelief.y * (1.0 - gOpen);
+  gCast = mix(1.0, gCast, relief);
   gLod = lod;
 }
-
-float box2(vec2 p, vec2 lo, vec2 hi) { return step(lo.x, p.x) * step(p.x, hi.x) * step(lo.y, p.y) * step(p.y, hi.y); }
 
 // Furniture, seen as a cut-out card standing across the middle of the room.
 // Returns coverage and writes its colour and how much it glows on its own.
@@ -620,6 +740,26 @@ float openingRim() {
   return mix(1.0, mix(0.5, 1.0, clamp(rim, 0.0, 1.0)), fade);
 }
 
+// 1 where x lies inside a span from 0 to 'size', with edges 'soft' wide.
+float spanLit(float x, float size, float soft) {
+  return smoothstep(-soft, soft, x) * (1.0 - smoothstep(size - soft, size + soft, x));
+}
+
+// The window's frame and glazing bars, which stand on the glass. q: position in the opening (metres).
+float frameMask(vec2 q) {
+  float border = gFrame.a;
+  if (border <= 0.0) return 0.0;
+  float aa = 0.75 * gPx + 0.002;
+  vec2 e = min(q, gPaneM - q);
+  float m = 1.0 - smoothstep(border - aa, border + aa, min(e.x, e.y));
+  // the stiles where two leaves meet are wider than the glazing bars across them
+  vec2 pane = gPaneM / gPanes;
+  vec2 d = abs(fract(q / pane + 0.5) - 0.5) * pane;
+  vec2 wide = vec2(0.032, 0.016);
+  vec2 bars = (1.0 - smoothstep(wide - aa, wide + aa, d)) * min(vec2(1.0), wide / aa) * step(1.5, gPanes);
+  return max(m, max(bars.x, bars.y));
+}
+
 float streetHalf(float line) { return mod(line, ${f(CHUNK_BLOCKS)}) < 0.5 ? ${f(BOULEVARD_HALF)} : ${f(STREET_HALF)}; }
 
 // The street lamps' light on the facades at night. The lamps stand on a known lattice
@@ -646,25 +786,103 @@ float lampWash() {
 
 export const BUILDING_FRAG_COLOR = /* glsl */ `
 #include <color_fragment>
+// How much wall is under this pixel, and how the wall lies: its own axes in view space (along it, up it, out of it).
+vec3 rAn = abs(vObjN);
+float rU = rAn.x > 0.5 ? vLocal.z : vLocal.x;
+gPx = max(fwidth(rU), fwidth(vLocal.y));
+gNear = 0.0; gSunFace = 0.0; gSunLean = vec2(0.0);
+vec3 rT = vec3(0.0);
+vec3 rB = vec3(0.0);
+bool reliefOn = uRelief.x > 0.0 && rAn.y < 0.5 && vInfo.x < 9.5 && gPx < 0.7;
+if (reliefOn) {
+  gNear = 1.0 - smoothstep(uRelief.z, uRelief.w, length(vViewPosition));
+  vec3 rN = normalize(vNormal);
+  vec3 q0 = -dFdx(vViewPosition);
+  vec3 q1 = -dFdy(vViewPosition);
+  vec2 st0 = dFdx(vec2(rU, vLocal.y));
+  vec2 st1 = dFdy(vec2(rU, vLocal.y));
+  vec3 q1p = cross(q1, rN);
+  vec3 q0p = cross(rN, q0);
+  rT = q1p * st0.x + q0p * st1.x;
+  rB = q1p * st0.y + q0p * st1.y;
+  float det = max(dot(rT, rT), dot(rB, rB));
+  float inv = det > 0.0 ? inversesqrt(det) : 0.0;
+  rT *= inv;
+  rB *= inv;
+  // (without axes there is nothing to turn the normal with)
+  reliefOn = det > 0.0;
+#if NUM_DIR_LIGHTS > 0
+  // where the sun (the moon, at night) stands from the wall's point of view
+  vec3 sunV = directionalLights[0].direction;
+  vec3 sunW = vec3(dot(sunV, rT), dot(sunV, rB), dot(sunV, rN));
+  gSunFace = smoothstep(0.0, 0.08, sunW.z);
+  gSunLean = clamp(sunW.xy / max(sunW.z, 0.1), -6.0, 6.0);
+#endif
+}
 float winMask; float winLit; float glassy; vec3 litCol;
 facade(diffuseColor.rgb, winMask, winLit, glassy, litCol);
 vec2 wallAO = wallOcclusion();
-float rimAO = 1.0;
-if (winMask > 0.01) rimAO = mix(1.0, openingRim(), (1.0 - gLod) * uLook.x);
-rimAO *= 1.0 - 0.35 * gShade * uLook.x;
-// dirt gathers where the wall meets the pavement, and the glass darkens towards its frame
-diffuseColor.rgb *= (1.0 - 0.24 * wallAO.y * uLook.x) * mix(1.0, rimAO, 0.6);
 // The café explosion: a blown-out cell opens onto the room behind it like a window with no glass.
 vec4 blast = blastWall();
 float hole = blast.x;
 // the torn edge shows the thickness of the wall, and the room is sooty near it
 float rim = hole * (1.0 - smoothstep(0.02, 0.06, blast.z));
 float soot = mix(1.0, (1.0 - rim) * (0.3 + 0.7 * smoothstep(0.06, 0.35, blast.z)), hole);
+
+// The glass sits back in the wall. Follow the line of sight in from the wall's face: it either
+// meets a side of the opening first (the reveal: stone, lit or shaded by where the sun is), or
+// reaches the glass further along than where it went in, which is what makes the window a hole.
+vec3 reliefN = vec3(-gSlope, 1.0);
+float sunShade = gCast;
+float revealAO = 1.0;
+float frame = 0.0;
+vec3 revealGlow = vec3(0.0);
+vec3 rd = vec3(rAn.x > 0.5 ? vViewF.z : vViewF.x, vViewF.y, -dot(vViewF, vObjN));
+float revealDepth = gDepth * uRelief.x * gNear;
+if (gOpen > 0.5 && hole < 0.5 && revealDepth > 0.001) {
+  float soft = 0.012 + gPx;
+  vec2 pm = gPane * gPaneM;
+  vec2 k = rd.xy / max(rd.z, 1e-3);
+  vec2 ks = vec2(abs(k.x) > 1e-5 ? k.x : 1e-5, abs(k.y) > 1e-5 ? k.y : 1e-5);
+  // how deep the line of sight is when it meets a side of the opening, and its sill or lintel
+  vec2 zSide = (step(0.0, ks) * gPaneM - pm) / ks;
+  float z = min(zSide.x, zSide.y);
+  if (z < revealDepth) {
+    vec2 h = pm + k * z;
+    float sunlit;
+    if (zSide.x < zSide.y) {
+      reliefN = vec3(-sign(ks.x), 0.0, 0.0);
+      sunlit = spanLit(h.y + gSunLean.y * z, gPaneM.y, soft);
+    } else {
+      reliefN = vec3(0.0, -sign(ks.y), 0.0);
+      sunlit = spanLit(h.x + gSunLean.x * z, gPaneM.x, soft);
+    }
+    sunShade *= sunlit * gSunFace;
+    revealAO = mix(1.0, 0.62, z / revealDepth);
+    diffuseColor.rgb = gWall;
+    // a lit room spills a little of its light onto the stone
+    revealGlow = gWall * litCol * (gRoomOn * 0.25 * uNight * z / revealDepth);
+    winMask = 0.0;
+    winLit = 0.0;
+  } else {
+    vec2 q = pm + k * revealDepth;
+    gRoom += q - pm;
+    gPane = q / gPaneM;
+    // the edge of the wall throws its shadow across the glass and whatever hangs behind it
+    vec2 e = q + gSunLean * revealDepth;
+    sunShade *= spanLit(e.x, gPaneM.x, soft) * spanLit(e.y, gPaneM.y, soft);
+    frame = frameMask(q) * gNear;
+  }
+}
+float pane = winMask;
+float rimAO = 1.0;
+if (pane > 0.01) rimAO = mix(1.0, openingRim(), (1.0 - gLod) * uLook.x);
+rimAO *= 1.0 - 0.35 * gShade * uLook.x;
+// dirt gathers where the wall meets the pavement, and the glass darkens towards its frame
+diffuseColor.rgb *= (1.0 - 0.24 * wallAO.y * uLook.x) * mix(1.0, rimAO, 0.6);
 // Far away a lit window is a flat warm pane; up close it opens onto a room.
 vec3 winGlow = litCol * winLit * 1.4 * uNight * (1.0 - hole);
-if ((winMask > 0.01 || hole > 0.5) && gLod < 0.98) {
-  vec3 an = abs(vObjN);
-  vec3 rd = vec3(an.x > 0.5 ? vViewF.z : vViewF.x, vViewF.y, -dot(vViewF, vObjN));
+if ((pane > 0.01 || hole > 0.5) && gLod < 0.98 && frame < 0.99) {
   float lamp; float day;
   vec3 room = roomInterior(rd, lamp, day);
   float s = hash12(gRoomId * 1.37 + 0.5);
@@ -678,18 +896,36 @@ if ((winMask > 0.01 || hole > 0.5) && gLod < 0.98) {
     // backlit curtains glow; seen from outside by day they are just cloth
     nightCol = mix(nightCol, dr.rgb * (light * gRoomOn * (dr.a < 0.5 ? 0.5 : 0.3) + 0.01), dr.a);
     dayCol = mix(dayCol, dr.rgb * 0.08, dr.a);
+    // and close to, that cloth hangs in the daylight that comes through the glass, so the reveal's shadow falls across it
+    diffuseColor.rgb = mix(diffuseColor.rgb, dr.rgb * 0.45, dr.a * 0.5 * gNear * (1.0 - uNight) * step(0.001, revealDepth));
   }
-  vec3 near = (nightCol * mix(1.0, rimAO, 0.5) * uNight + dayCol * rimAO * (1.0 - uNight)) * max(winMask, hole) * soot;
+  vec3 near = (nightCol * mix(1.0, rimAO, 0.5) * uNight + dayCol * rimAO * (1.0 - uNight)) * max(pane, hole) * soot;
   winGlow = mix(near, winGlow, gLod);
 }
+// the frame stands in front of the room
+diffuseColor.rgb = mix(diffuseColor.rgb, gFrame.rgb * mix(1.0, rimAO, 0.6), frame);
+winMask *= 1.0 - frame;
+winGlow = winGlow * (1.0 - frame) + revealGlow;
 if (hole > 0.5) {
   diffuseColor.rgb = mix(vec3(0.03, 0.027, 0.025), vColor.rgb * 0.3, rim);
   winMask = 0.0;
+  reliefN = vec3(0.0, 0.0, 1.0);
 } else {
   diffuseColor.rgb *= 1.0 - blast.y * 0.6 * (1.0 - gLod);
   // the wave blows the glass out of the windows it passes
   winMask *= 1.0 - blast.w;
+  // the balconies' ironwork stands in front of the wall and its windows
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.06, 0.06, 0.07), gRail);
+  winMask *= 1.0 - gRail;
+  winGlow *= 1.0 - gRail;
+  reliefN = mix(reliefN, vec3(0.0, 0.0, 1.0), gRail);
 }
+`;
+
+// The wall's relief turns the surface the light falls on: bumps lean it, a reveal's side faces across the opening.
+export const BUILDING_FRAG_NORMAL = /* glsl */ `
+#include <normal_fragment_maps>
+if (reliefOn) normal = normalize(rT * reliefN.x + rB * reliefN.y + normal * reliefN.z);
 `;
 
 export const BUILDING_FRAG_ROUGH = /* glsl */ `
@@ -705,13 +941,17 @@ export const BUILDING_FRAG_EMISSIVE = /* glsl */ `
 totalEmissiveRadiance += winGlow;
 if (uNight > 0.02 && uLook.y > 0.0) totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.72, 0.42) * (lampWash() * uNight * uLook.y * 0.5);
 `;
-// Runs after lighting: the sky's light (not the sun's) is dimmed where the pixel cannot see much sky.
+// Runs after lighting: the sky's light (not the sun's) is dimmed where the pixel cannot see much sky,
+// and the sun's where a ledge or the side of a window opening stands in its way.
 export const BUILDING_FRAG_AO = /* glsl */ `
 #include <aomap_fragment>
 {
-  float skyAO = mix(1.0, wallAO.x * rimAO, uLook.x);
+  float skyAO = mix(1.0, wallAO.x * rimAO, uLook.x) * revealAO;
   reflectedLight.indirectDiffuse *= skyAO;
   reflectedLight.indirectSpecular *= mix(1.0, skyAO, 0.7);
+  // the sun is the only light that arrives from one direction, so the relief's shadows are cut out of it here
+  reflectedLight.directDiffuse *= sunShade;
+  reflectedLight.directSpecular *= sunShade;
 }
 `;
 

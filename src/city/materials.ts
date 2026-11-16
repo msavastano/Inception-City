@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { MAX_FOLDS } from '../core/config';
+import { boneTexture, boneTextureSize } from '../people/crowd';
 import { blendIntoSky, patchHaze } from '../world/atmosphere';
 import {
   BUILDING_FRAG_AO,
@@ -15,6 +16,12 @@ import {
   GROUND_FRAG_ROUGH,
   GROUND_FRAG_WET,
   GROUND_VERT_HEAD,
+  PERSON_FRAG_AO,
+  PERSON_FRAG_COLOR,
+  PERSON_FRAG_EMISSIVE,
+  PERSON_FRAG_HEAD,
+  PERSON_FRAG_ROUGH,
+  PERSON_VERT_HEAD,
   PICK_FRAG,
   PROP_FRAG_AO,
   PROP_FRAG_COLOR,
@@ -69,9 +76,12 @@ export const U = {
   uSkyFog: { value: new THREE.Color() },
   uSkySun: { value: new THREE.Color() },
   uSkySunDir: { value: new THREE.Vector3(0.3, 0.8, 0.4).normalize() },
+  // The crowd's bones, frame by frame (src/people/crowd.ts); baked when the first person material is made.
+  tBones: { value: null as THREE.Texture | null },
+  uBoneTexel: { value: new THREE.Vector2(1, 1) },
 };
 
-type Kind = 'building' | 'ground' | 'prop' | 'shard';
+type Kind = 'building' | 'ground' | 'prop' | 'person' | 'shard';
 
 const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [string, string][] }> = {
   building: {
@@ -109,6 +119,17 @@ const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [s
       ['#include <aomap_fragment>', PROP_FRAG_AO],
     ],
   },
+  person: {
+    vert: PERSON_VERT_HEAD,
+    frag: PERSON_FRAG_HEAD,
+    call: 'personVertex',
+    replace: [
+      ['#include <color_fragment>', PERSON_FRAG_COLOR],
+      ['#include <roughnessmap_fragment>', PERSON_FRAG_ROUGH],
+      ['#include <emissivemap_fragment>', PERSON_FRAG_EMISSIVE],
+      ['#include <aomap_fragment>', PERSON_FRAG_AO],
+    ],
+  },
   shard: {
     vert: SHARD_VERT_HEAD,
     frag: SHARD_FRAG_HEAD,
@@ -121,6 +142,14 @@ const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [s
   },
 };
 
+/** The person shaders read the crowd's bone texture: bake it once, the first time anyone needs it. */
+function needBones(kind: Kind): void {
+  if (kind !== 'person' || U.tBones.value) return;
+  U.tBones.value = boneTexture();
+  const { width, height } = boneTextureSize();
+  U.uBoneTexel.value.set(1 / width, 1 / height);
+}
+
 function must(src: string, find: string): string {
   if (!src.includes(find)) throw new Error(`shader patch target missing: ${find}`);
   return find;
@@ -129,6 +158,7 @@ function must(src: string, find: string): string {
 /** A MeshStandardMaterial whose vertices are folded and whose surface is painted procedurally. */
 export function foldedMaterial(kind: Kind, params: THREE.MeshStandardMaterialParameters = {}): THREE.MeshStandardMaterial {
   const spec = SPEC[kind];
+  needBones(kind);
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0, ...params });
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, U);
@@ -154,6 +184,7 @@ export function foldedMaterial(kind: Kind, params: THREE.MeshStandardMaterialPar
 /** Shadow-map depth material with the same folding, so folded flaps cast true shadows. */
 export function foldedDepthMaterial(kind: Kind): THREE.MeshDepthMaterial {
   const spec = SPEC[kind];
+  needBones(kind);
   const mat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, U);
@@ -170,7 +201,7 @@ export function foldedDepthMaterial(kind: Kind): THREE.MeshDepthMaterial {
 }
 
 /** Renders fabric coordinates (x, height, z, kind) for GPU picking on folded geometry. */
-export function pickMaterial(kind: Exclude<Kind, 'prop' | 'shard'>, kindId: number): THREE.ShaderMaterial {
+export function pickMaterial(kind: Exclude<Kind, 'prop' | 'person' | 'shard'>, kindId: number): THREE.ShaderMaterial {
   const spec = SPEC[kind];
   return new THREE.ShaderMaterial({
     uniforms: { ...U, uKind: { value: kindId } },

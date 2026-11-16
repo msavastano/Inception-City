@@ -1,7 +1,9 @@
 import * as THREE from 'three';
-import { beamGeometry, gramophoneGeometry, personGeometry, sleepMachineGeometry, totemGeometry } from '../city/geometry';
+import { beamGeometry, gramophoneGeometry, sleepMachineGeometry, totemGeometry } from '../city/geometry';
 import { U } from '../city/materials';
 import { FOLD_GLSL } from '../city/shaders';
+import { People, TARGET_OUTFIT } from '../people/crowd';
+import { clip } from '../people/rig';
 import { Item, ItemKind } from './heist';
 
 /** Beam colours: a cold sleep machine, a gold kick, a white totem, a red target. */
@@ -16,7 +18,6 @@ const BEAM_STRENGTH = 1.6;
 
 /** Prop kinds as the prop shader knows them (iState.y). */
 const STILL = 0;
-const PERSON = 2;
 const TOP = 3;
 
 /** One prop of one shape, drawn with the city's folded prop material so it sits on the folds like everything else. */
@@ -51,8 +52,8 @@ class PropSlot {
   /** Stand it at a fabric point; it grows in from birth (dream time). */
   show(x: number, z: number, yaw: number, birth: number): void {
     this.pos.array.set([x, 0, z, yaw]);
-    // still props grow in from their birth time; people use the slot as a (frozen) walk phase
-    this.param.array.set([this.scale, this.tone, this.kind === PERSON ? 0 : birth, this.spin]);
+    // props grow in from their birth time
+    this.param.array.set([this.scale, this.tone, birth, this.spin]);
     this.state.array.set([0, this.kind, 0, 0]);
     for (const a of [this.pos, this.param, this.state]) a.needsUpdate = true;
     this.geometry.instanceCount = 1;
@@ -108,21 +109,25 @@ void main() {
  */
 export class HeistMarks {
   readonly group = new THREE.Group();
-  private props: Record<ItemKind, PropSlot>;
+  private props: Record<Exclude<ItemKind, 'target'>, PropSlot>;
+  /** The target: one of the people (src/people/crowd.ts), in a black overcoat and hat, waiting. */
+  private target: People;
+  private targetAt: { x: number; z: number; yaw: number } | null = null;
   private beamGeo = new THREE.InstancedBufferGeometry();
   private beamAttr = new THREE.InstancedBufferAttribute(new Float32Array(4 * 4), 4);
   private beamColor = new THREE.InstancedBufferAttribute(new Float32Array(4 * 3), 3);
 
-  constructor(material: THREE.Material, depth: THREE.Material) {
+  constructor(material: THREE.Material, depth: THREE.Material, person: THREE.Material, personDepth: THREE.Material) {
     this.props = {
       machine: new PropSlot(sleepMachineGeometry(), material, depth, STILL, 1.4),
       kick: new PropSlot(gramophoneGeometry(), material, depth, STILL, 1.3),
       // the totem is the Circus monument in miniature, spinning on its point
       totem: new PropSlot(totemGeometry(), material, depth, TOP, 0.045, 0.5, 9),
-      // the target wears the darkest coat (tone 0) and stands a little taller than the crowd
-      target: new PropSlot(personGeometry(), material, depth, PERSON, 1.08, 0.02),
     };
     for (const p of Object.values(this.props)) this.group.add(p.mesh);
+    this.target = new People(person, personDepth, 1);
+    this.target.dress(0, TARGET_OUTFIT);
+    this.group.add(this.target.mesh);
 
     const base = beamGeometry();
     for (const [name, attr] of Object.entries(base.attributes)) this.beamGeo.setAttribute(name, attr);
@@ -151,11 +156,13 @@ export class HeistMarks {
    */
   show(items: readonly Item[], planted: boolean, birth: number): void {
     for (const p of Object.values(this.props)) p.hide();
+    this.targetAt = null;
     let n = 0;
     for (const it of items) {
       const keep = it.kind === 'target' || !it.taken;
       if (!keep) continue;
-      this.props[it.kind].show(it.x, it.z, it.yaw, birth);
+      if (it.kind === 'target') this.targetAt = { x: it.x, z: it.z, yaw: it.yaw };
+      else this.props[it.kind].show(it.x, it.z, it.yaw, birth);
       if (it.kind === 'target' && planted) continue;
       this.beamAttr.array.set([it.x, it.z, BEAM_HEIGHT, BEAM_STRENGTH], n * 4);
       this.beamColor.array.set(BEAM_COLOR[it.kind], n * 3);
@@ -164,10 +171,22 @@ export class HeistMarks {
     this.beamAttr.needsUpdate = true;
     this.beamColor.needsUpdate = true;
     this.beamGeo.instanceCount = n;
+    this.update(birth);
+  }
+
+  /** The target stands and waits, breathing (time: the dream's clock). */
+  update(time: number): void {
+    const at = this.targetAt;
+    this.target.count = at ? 1 : 0;
+    if (!at) return;
+    this.target.stand(0, { x: at.x, y: 0, z: at.z, yaw: at.yaw, clip: 'idle', phase: time / clip('idle').duration });
+    this.target.commit();
   }
 
   clear(): void {
     for (const p of Object.values(this.props)) p.hide();
+    this.targetAt = null;
+    this.target.count = 0;
     this.beamGeo.instanceCount = 0;
   }
 }

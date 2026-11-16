@@ -1,12 +1,16 @@
 import * as THREE from 'three';
 import { BLOCK, mod, streetHalfWidth } from '../core/config';
 import { rng } from '../core/rng';
-import { personGeometry } from '../city/geometry';
+import { Outfit, pedestrian, People } from '../people/crowd';
+import { clip, ClipName } from '../people/rig';
 
 /**
  * The dreamer's projections: pedestrians who walk the sidewalks in fabric
  * space (so they keep walking on walls and ceilings when the city folds) and
- * who turn on you when the dream becomes unstable.
+ * who turn on you when the dream becomes unstable. They are drawn as People
+ * (src/people/crowd.ts): this file decides where each one is and which clip
+ * they are in, and moves each clip on with the ground its owner covers, so
+ * nobody's feet slide.
  *
  * Sidewalks form a lattice: along each axis, node 2k sits just before street
  * line k and node 2k+1 just after it. Every lattice edge is either a stretch of
@@ -19,6 +23,14 @@ function nodeCoord(i: number): number {
   return line * BLOCK + (mod(i, 2) === 0 ? -o : o);
 }
 
+/** The two ways of walking, and how far one cycle (two steps) of each carries a walker. */
+const WALKS: ClipName[] = ['stroll', 'walk'];
+const JOG = clip('jog');
+/** Seconds to change from one clip to another. */
+const FADE = 0.3;
+/** People this close to the focus cast shadows (metres). */
+const SHADOW_RANGE = 110;
+
 interface Agent {
   x: number;
   z: number;
@@ -29,11 +41,28 @@ interface Agent {
   dx: number;
   dz: number;
   speed: number;
+  /** How this one walks. */
+  walk: ClipName;
+  /** The clip being played, and its phase in cycles. */
+  clip: ClipName;
   phase: number;
-  tone: number;
+  /** The clip being left, frozen where it was, and how much of it remains. */
+  from: ClipName;
+  fromPhase: number;
+  fade: number;
+  /** Standing about for this many more seconds (talking, or just waiting). */
+  rest: number;
+  pause: ClipName;
+  /** How readily this one turns on the dreamer, 0 to 1. */
+  keen: number;
   suspicion: number;
   yaw: number;
+  /** The head, turned towards the dreamer (radians to the left). */
+  look: number;
   hunting: boolean;
+  outfit: Outfit;
+  /** Distance from the focus, for drawing the nearest first. */
+  away: number;
 }
 
 /** How a crowd behaves. The defaults are the city's own projections; Heist mode's guards tighten them. */
@@ -49,18 +78,20 @@ export interface CrowdOptions {
   far?: number;
   /** 0: some people are more suspicious than others. 1: everyone is (guards). */
   zeal?: number;
-  /** Range of coat tones (the prop shader picks one of four coats from it). */
-  tones?: [number, number];
+  /** What each one wears (src/people/crowd.ts). The default is a street's mix of pedestrians. */
+  outfit?: (r: () => number) => Outfit;
+}
+
+function wrap(a: number): number {
+  return Math.atan2(Math.sin(a), Math.cos(a));
 }
 
 export class Projections {
+  readonly people: People;
   readonly mesh: THREE.Mesh;
-  private geometry = new THREE.InstancedBufferGeometry();
-  private aPos: THREE.InstancedBufferAttribute;
-  private aParam: THREE.InstancedBufferAttribute;
-  private aState: THREE.InstancedBufferAttribute;
   private agents: Agent[] = [];
   private rand = rng(1234);
+  private wardrobe = rng(4321);
   maxSuspicion = 0;
   watching = 0;
   /** How many are hunting the dreamer right now. */
@@ -75,25 +106,9 @@ export class Projections {
     readonly capacity: number,
     options: CrowdOptions = {},
   ) {
-    this.opts = { spread: 18, leash: 330, respawnMin: 140, near: 50, far: 230, zeal: 0, tones: [0, 1], ...options };
-    const base = personGeometry();
-    for (const [name, attr] of Object.entries(base.attributes)) this.geometry.setAttribute(name, attr);
-    const mk = (size: number) => {
-      const a = new THREE.InstancedBufferAttribute(new Float32Array(capacity * size), size);
-      a.setUsage(THREE.DynamicDrawUsage);
-      return a;
-    };
-    this.aPos = mk(4);
-    this.aParam = mk(4);
-    this.aState = mk(4);
-    this.geometry.setAttribute('iPosYaw', this.aPos);
-    this.geometry.setAttribute('iParam', this.aParam);
-    this.geometry.setAttribute('iState', this.aState);
-    this.geometry.instanceCount = 0;
-    this.mesh = new THREE.Mesh(this.geometry, material);
-    this.mesh.customDepthMaterial = depth;
-    this.mesh.castShadow = true;
-    this.mesh.frustumCulled = false;
+    this.opts = { spread: 18, leash: 330, respawnMin: 140, near: 50, far: 230, zeal: 0, outfit: pedestrian, ...options };
+    this.people = new People(material, depth, capacity);
+    this.mesh = this.people.mesh;
   }
 
   setCount(n: number, fx: number, fz: number): void {
@@ -101,10 +116,13 @@ export class Projections {
     while (this.agents.length < n) {
       const a = {} as Agent;
       this.spawn(a, fx, fz, 0);
+      // everyone keeps their clothes, wherever they are sent
+      a.outfit = this.opts.outfit(this.wardrobe);
+      a.away = 0;
       this.agents.push(a);
     }
     this.agents.length = n;
-    this.geometry.instanceCount = n;
+    this.people.count = n;
   }
 
   private spawn(a: Agent, fx: number, fz: number, minDist: number): void {
@@ -116,11 +134,19 @@ export class Projections {
       a.z = nodeCoord(a.iz);
       if (Math.hypot(a.x - fx, a.z - fz) >= minDist) break;
     }
-    a.speed = 1.1 + r() * 0.7;
-    a.phase = r() * 6.28;
-    const [t0, t1] = this.opts.tones;
-    a.tone = t0 + (t1 - t0) * r();
+    // everyone walks at their own pace, from a dawdle to a hurry, around the pace their walk was animated at
+    a.walk = WALKS[Math.floor(r() * WALKS.length)];
+    a.speed = clip(a.walk).speed! * (0.88 + r() * 0.5);
+    a.phase = r();
+    a.clip = a.walk;
+    a.from = a.walk;
+    a.fromPhase = 0;
+    a.fade = 0;
+    a.pause = r() < 0.5 ? 'talk' : 'idle';
+    a.rest = r() < 0.1 ? 3 + r() * 9 : 0;
+    a.keen = r();
     a.suspicion = 0;
+    a.look = 0;
     a.hunting = false;
     const dirs = [
       [1, 0],
@@ -163,6 +189,19 @@ export class Projections {
     }
     a.tx = nx;
     a.tz = nz;
+    // now and then someone stops at a corner for a while
+    if (this.rand() < 0.07) a.rest = 3 + this.rand() * 9;
+  }
+
+  /** Change an agent's clip, fading out of the old one. Walking and jogging share a phase, so the stride carries over. */
+  private play(a: Agent, name: ClipName): void {
+    if (a.clip === name) return;
+    const strides = (n: ClipName) => n !== 'idle' && n !== 'talk';
+    a.from = a.clip;
+    a.fromPhase = a.phase;
+    a.fade = 1;
+    if (!strides(name) || !strides(a.clip)) a.phase = strides(name) ? 0 : this.rand();
+    a.clip = name;
   }
 
   update(
@@ -176,39 +215,44 @@ export class Projections {
     alert = 0,
   ): void {
     const o = this.opts;
-    const pos = this.aPos.array as Float32Array;
-    const par = this.aParam.array as Float32Array;
-    const st = this.aState.array as Float32Array;
     const tx = dreamer ? dreamer.x : focusX;
     const tz = dreamer ? dreamer.z : focusZ;
     let maxS = 0;
     let watching = 0;
     let hunting = 0;
 
+    // nearest the focus first, so that the shadow pass can stop after the people whose shadows can be seen
+    for (const a of this.agents) a.away = Math.hypot(a.x - focusX, a.z - focusZ);
+    this.agents.sort((a, b) => a.away - b.away);
+    let near = 0;
+
     this.agents.forEach((a, i) => {
-      if (Math.hypot(a.x - focusX, a.z - focusZ) > o.leash) this.spawn(a, focusX, focusZ, o.respawnMin);
+      if (a.away < SHADOW_RANGE) near = i + 1;
+      if (a.away > o.leash) this.spawn(a, focusX, focusZ, o.respawnMin);
 
       const toX = tx - a.x;
       const toZ = tz - a.z;
       const dist = Math.hypot(toX, toZ);
       const prox = 1 - THREE.MathUtils.smoothstep(dist, o.near, o.far);
-      const keen = THREE.MathUtils.lerp(0.6 + 0.4 * a.tone, 1, o.zeal);
+      const keen = THREE.MathUtils.lerp(0.6 + 0.4 * a.keen, 1, o.zeal);
       const target = Math.min(1, instability * 1.25 + alert) * prox * keen;
       a.suspicion += (target - a.suspicion) * Math.min(1, dt * (target > a.suspicion ? 0.9 : 0.25));
       maxS = Math.max(maxS, a.suspicion);
+      const bearing = Math.atan2(toX, toZ);
 
-      let moving = true;
       if (a.suspicion > 0.8 && dreamer) {
-        // hunt
+        // hunt: run straight at the dreamer
         a.hunting = true;
+        a.rest = 0;
         const sp = 2.4 + a.suspicion * 2.2;
         a.x += (toX / Math.max(dist, 1e-3)) * sp * dt;
         a.z += (toZ / Math.max(dist, 1e-3)) * sp * dt;
         const c = collide(a.x, a.z, 0.3);
         a.x = c.x;
         a.z = c.z;
-        a.yaw = Math.atan2(toX, toZ);
-        a.phase += dt * sp * 5.5;
+        a.yaw += wrap(bearing - a.yaw) * Math.min(1, dt * 10);
+        this.play(a, 'jog');
+        a.phase += (dt * sp) / JOG.stride!;
         if (dist < 1.1 && this.onCaught) {
           this.onCaught(a.x, a.z);
           a.suspicion = 0.3;
@@ -217,11 +261,9 @@ export class Projections {
         hunting++;
       } else if (a.suspicion > 0.42) {
         // stop and stare
-        moving = false;
-        const want = Math.atan2(toX, toZ);
-        let dy = want - a.yaw;
-        dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-        a.yaw += dy * Math.min(1, dt * 5);
+        a.yaw += wrap(bearing - a.yaw) * Math.min(1, dt * 5);
+        this.play(a, 'idle');
+        a.phase += dt / clip('idle').duration;
         watching++;
       } else {
         if (a.hunting) {
@@ -232,47 +274,58 @@ export class Projections {
           a.dx = 1;
           a.dz = 0;
         }
-        const gx = nodeCoord(a.tx);
-        const gz = nodeCoord(a.tz);
-        const ex = gx - a.x;
-        const ez = gz - a.z;
-        const el = Math.hypot(ex, ez);
-        const step = a.speed * dt;
-        if (el <= step) {
-          a.x = gx;
-          a.z = gz;
-          this.nextEdge(a);
+        if (a.rest > 0) {
+          a.rest -= dt;
+          this.play(a, a.pause);
+          a.phase += dt / clip(a.pause).duration;
         } else {
-          a.x += (ex / el) * step;
-          a.z += (ez / el) * step;
-          const want = Math.atan2(ex, ez);
-          let dy = want - a.yaw;
-          dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-          a.yaw += dy * Math.min(1, dt * 8);
+          const gx = nodeCoord(a.tx);
+          const gz = nodeCoord(a.tz);
+          const ex = gx - a.x;
+          const ez = gz - a.z;
+          const el = Math.hypot(ex, ez);
+          const step = a.speed * dt;
+          if (el <= step) {
+            a.x = gx;
+            a.z = gz;
+            this.nextEdge(a);
+          } else {
+            a.x += (ex / el) * step;
+            a.z += (ez / el) * step;
+            a.yaw += wrap(Math.atan2(ex, ez) - a.yaw) * Math.min(1, dt * 8);
+          }
+          this.play(a, a.walk);
+          // a stride for each stride-length of pavement
+          a.phase += step / clip(a.walk).stride!;
         }
-        a.phase += dt * a.speed * 5.5;
       }
-      if (!moving) a.phase += (Math.round(a.phase / Math.PI) * Math.PI - a.phase) * Math.min(1, dt * 6);
+      if (a.fade > 0) a.fade = Math.max(0, a.fade - dt / FADE);
 
-      pos[i * 4] = a.x;
-      pos[i * 4 + 1] = 0;
-      pos[i * 4 + 2] = a.z;
-      pos[i * 4 + 3] = a.yaw;
-      par[i * 4] = 0.94 + a.tone * 0.14;
-      par[i * 4 + 1] = a.tone;
-      par[i * 4 + 2] = a.phase;
-      par[i * 4 + 3] = 0;
-      st[i * 4] = a.suspicion;
-      st[i * 4 + 1] = 2;
+      // someone who has begun to notice turns their head to watch the dreamer go by (not right round: nobody's neck does that)
+      const off = wrap(bearing - a.yaw);
+      const notice = dreamer && Math.abs(off) < 2 ? THREE.MathUtils.smoothstep(a.suspicion, 0.1, 0.3) : 0;
+      a.look += (THREE.MathUtils.clamp(off, -1.2, 1.2) * notice - a.look) * Math.min(1, dt * 6);
+
+      this.people.dress(i, a.outfit);
+      this.people.stand(i, {
+        x: a.x,
+        y: 0,
+        z: a.z,
+        yaw: a.yaw,
+        clip: a.clip,
+        phase: a.phase,
+        from: a.from,
+        fromPhase: a.fromPhase,
+        fade: a.fade,
+        look: a.look,
+        suspicion: a.suspicion,
+      });
     });
     this.maxSuspicion = maxS;
     this.watching = watching;
     this.hunting = hunting;
-    for (const attr of [this.aPos, this.aParam, this.aState]) {
-      attr.clearUpdateRanges();
-      attr.addUpdateRange(0, this.agents.length * 4);
-      attr.needsUpdate = true;
-    }
+    this.people.shadows = near;
+    this.people.commit();
   }
 
   /** Everyone forgets (after a kick). */

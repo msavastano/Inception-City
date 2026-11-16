@@ -19,6 +19,7 @@ import { Collapse, planShards } from './world/collapse';
 import { Environment } from './world/environment';
 import { HALL_LENGTH, Hallway } from './world/hallway';
 import { LOOK, TONE_CURVES, readLook } from './world/look';
+import { guard } from './people/crowd';
 import { Projections } from './world/projections';
 import { LEVELS } from './world/themes';
 
@@ -167,7 +168,7 @@ export class App implements DreamContext {
     U.uFoldB.value = this.folds.uB;
 
     this.scene.add(this.makeTotem());
-    this.crowd = new Projections(this.streamer.propMaterial, this.streamer.propDepth, QUALITY.ultra.crowd);
+    this.crowd = new Projections(this.streamer.personMaterial, this.streamer.personDepth, QUALITY.ultra.crowd);
     this.crowd.setCount(this.crowdCount, 0, 0);
     this.crowd.onCaught = (x, z) => {
       if (this.run) this.struck(x, z);
@@ -178,18 +179,18 @@ export class App implements DreamContext {
     };
     this.scene.add(this.crowd.mesh);
     // the target's bodyguards: few, in navy, and they go for anyone who comes close
-    this.guards = new Projections(this.streamer.propMaterial, this.streamer.propDepth, GUARDS, {
+    this.guards = new Projections(this.streamer.personMaterial, this.streamer.personDepth, GUARDS, {
       spread: 5,
       leash: 110,
       respawnMin: 0,
       near: 14,
       far: 50,
       zeal: 1,
-      tones: [0.5, 0.74],
+      outfit: guard,
     });
     this.guards.onCaught = (x, z) => this.struck(x, z);
     this.scene.add(this.guards.mesh);
-    this.marks = new HeistMarks(this.streamer.propMaterial, this.streamer.propDepth);
+    this.marks = new HeistMarks(this.streamer.propMaterial, this.streamer.propDepth, this.streamer.personMaterial, this.streamer.personDepth);
     this.scene.add(this.marks.group);
     this.scene.add(this.hallway.mesh);
     this.scene.add(this.collapse.mesh);
@@ -544,6 +545,7 @@ export class App implements DreamContext {
     if (r === 'none') return;
     this.audio.hurt();
     this.walk.shove(x, z);
+    this.walk.body.play('hit');
     this.hurtFlash = 1;
     if (r === 'dead') {
       this.flash = 0.6;
@@ -556,6 +558,7 @@ export class App implements DreamContext {
     switch (e.type) {
       case 'pickup': {
         this.audio.chime();
+        this.walk.body.play('pick');
         this.marks.show(run.here, run.planted, this.dreamBorn);
         if (e.item.kind === 'totem') {
           document.body.classList.add('has-totem');
@@ -1150,6 +1153,7 @@ export class App implements DreamContext {
       this.crowd.update(wdt, focus.x, focus.z, dreamer, this.instability, collide, ALERT_AT_DEPTH[run.depth] + (running ? RUN_ALERT : 0));
       const target = run.depth === TARGET_DEPTH ? run.target : undefined;
       if (target) this.guards.update(wdt, target.x, target.z, dreamer, this.instability, collide, run.planted ? 0 : 1);
+      this.marks.update(this.time);
     }
     this.updateHeist(dt);
 

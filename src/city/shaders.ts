@@ -13,6 +13,7 @@ import {
   SIDEWALK,
   STREET_HALF,
 } from '../core/config';
+import { PART, PIECE } from '../people/body';
 
 const f = (n: number) => n.toFixed(4);
 
@@ -1147,18 +1148,18 @@ totalEmissiveRadiance += groundGlow;
 `;
 
 // ---------------------------------------------------------------------------
-// Props: trees, lamps, projections (people) and the totem
+// Props: trees, lamps and the totem
 // ---------------------------------------------------------------------------
 
 export const PROP_VERT_HEAD = /* glsl */ `
 attribute vec4 iPosYaw;  // x, y, z, yaw
-attribute vec4 iParam;   // scale, tone, birth time or walk phase, spin speed
-attribute vec4 iState;   // suspicion, kind (0 tree, 1 lamp, 2 person, 3 totem), unused, unused
-attribute float aPart;   // 0 solid, 1 foliage, 2 lamp glass, 3 body, 4 head, 5 metal, 6 glowing
+attribute vec4 iParam;   // scale, tone, birth time, spin speed
+attribute vec4 iState;   // unused, kind (0 tree, 1 lamp, 3 totem), unused, unused
+attribute float aPart;   // 0 solid, 1 foliage, 2 lamp glass, 5 metal, 6 glowing
 attribute vec3 aColor;
 varying vec3 vColorV;
 varying float vPart;
-varying vec2 vTone;      // tone, suspicion
+varying vec2 vTone;      // tone, unused
 varying vec3 vFabric;
 varying float vUp;       // height on the model, before scaling (for ambient occlusion)
 ${FOLD_GLSL}
@@ -1184,12 +1185,6 @@ void propVertex(out vec3 P, out vec3 N) {
     float sway = sin(uTime * 1.3 + iPosYaw.x * 0.11 + iPosYaw.z * 0.07) * 0.12 * position.y / 6.0;
     local.x += sway;
     local.z += sway * 0.6;
-  }
-  if (kind > 1.5 && kind < 2.5) {
-    // walking bob and a slight lean into the stride
-    float ph = iParam.z;
-    local.y += abs(sin(ph)) * 0.05;
-    if (position.y < 0.85) local.z += sin(ph) * 0.18 * sign(position.x + 0.0001) * (0.85 - position.y);
   }
   float yaw = iPosYaw.w + uTime * iParam.w;
   local = rotY(local * scale, yaw);
@@ -1237,7 +1232,7 @@ float propMetal = 0.0;
 float propRough = 0.8;
 vec3 propGlow = vec3(0.0);
 // Ambient occlusion: whatever stands on the pavement is darkest where it meets it
-float propAO = vPart < 0.5 || (vPart > 2.5 && vPart < 3.5) ? mix(0.5, 1.0, smoothstep(0.0, 0.6, vUp)) : 1.0;
+float propAO = vPart < 0.5 ? mix(0.5, 1.0, smoothstep(0.0, 0.6, vUp)) : 1.0;
 if (vPart > 0.5 && vPart < 1.5) {
   diffuseColor.rgb = mix(uFoliageA, uFoliageB, vTone.x) * (0.75 + 0.5 * vColorV.g);
   // the underside of a crown looks at the pavement, not the sky, and little sun gets in there
@@ -1247,17 +1242,6 @@ if (vPart > 0.5 && vPart < 1.5) {
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.95, 0.98), uSnow * 0.7);
 } else if (vPart > 1.5 && vPart < 2.5) {
   propGlow = vec3(1.0, 0.78, 0.5) * (0.25 + 3.0 * uNight);
-} else if (vPart > 2.5 && vPart < 4.5) {
-  vec3 coats[4];
-  coats[0] = vec3(0.12, 0.12, 0.14); coats[1] = vec3(0.32, 0.27, 0.22);
-  coats[2] = vec3(0.18, 0.22, 0.3); coats[3] = vec3(0.4, 0.38, 0.35);
-  int ci = int(floor(vTone.x * 3.999));
-  vec3 coat = coats[0];
-  if (ci == 1) coat = coats[1]; else if (ci == 2) coat = coats[2]; else if (ci == 3) coat = coats[3];
-  if (vPart < 3.5) diffuseColor.rgb = coat;
-  float s = vTone.y;
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.35, 0.03, 0.03), smoothstep(0.35, 1.0, s));
-  propGlow = vec3(0.9, 0.08, 0.05) * smoothstep(0.7, 1.0, s) * (vPart > 3.5 ? 1.2 : 0.15);
 } else if (vPart > 4.5 && vPart < 5.5) {
   propMetal = 0.9;
   propRough = 0.28;
@@ -1283,6 +1267,158 @@ export const PROP_FRAG_AO = /* glsl */ `
 #include <aomap_fragment>
 {
   float skyAO = mix(1.0, propAO, uLook.x);
+  reflectedLight.indirectDiffuse *= skyAO;
+  reflectedLight.indirectSpecular *= mix(1.0, skyAO, 0.7);
+}
+`;
+
+// ---------------------------------------------------------------------------
+// People: the dreamer's projections (src/people/crowd.ts)
+// ---------------------------------------------------------------------------
+
+export const PERSON_VERT_HEAD = /* glsl */ `
+attribute vec4 iPosYaw;  // x, y, z, yaw
+attribute vec4 iAnim;    // bone-texture row of the clip, row of the clip being left, how much of that one remains, head turn (radians, to the left)
+attribute vec4 iBody;    // scale, build (0 the man, 1 the woman), pieces worn (bit flags), suspicion
+attribute vec4 iColA;    // jacket rgb, skin (0 pale to 1 dark)
+attribute vec4 iColB;    // trousers or skirt rgb, hair (0 black, brown, fair, 1 grey)
+attribute vec4 iColC;    // tie or scarf rgb, tights under a skirt
+attribute vec3 aMorph;   // from the man's vertex to the woman's
+attribute vec4 aSkin;    // two bones, the weight of the first, how much of the head's turn this vertex takes
+attribute vec2 aInfo;    // part (PART in src/people/body.ts), piece (PIECE)
+uniform sampler2D tBones;   // a row a frame, three texels a bone: the rows of its 3 x 4 skinning matrix
+uniform vec2 uBoneTexel;    // 1 / the texture's width and height
+varying vec3 vColorV;
+varying vec3 vTone;      // on the head (1) or not, suspicion, roughness
+varying vec3 vFabric;
+varying float vUp;       // height on the body, before scaling (for ambient occlusion)
+${FOLD_GLSL}
+
+vec3 rotY(vec3 v, float a) { float c = cos(a), s = sin(a); return vec3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z); }
+
+void boneAt(float b, float row, out vec4 r0, out vec4 r1, out vec4 r2) {
+  // exactly on a texel across (one bone must not bleed into the next), between two down (two frames, blended)
+  float u = (b * 3.0 + 0.5) * uBoneTexel.x;
+  float v = (row + 0.5) * uBoneTexel.y;
+  r0 = texture2D(tBones, vec2(u, v));
+  r1 = texture2D(tBones, vec2(u + uBoneTexel.x, v));
+  r2 = texture2D(tBones, vec2(u + 2.0 * uBoneTexel.x, v));
+}
+
+void poseAt(float row, out vec4 r0, out vec4 r1, out vec4 r2) {
+  boneAt(aSkin.x, row, r0, r1, r2);
+  if (aSkin.z < 0.998) {
+    vec4 s0; vec4 s1; vec4 s2;
+    boneAt(aSkin.y, row, s0, s1, s2);
+    r0 = mix(s0, r0, aSkin.z); r1 = mix(s1, r1, aSkin.z); r2 = mix(s2, r2, aSkin.z);
+  }
+}
+
+vec3 hairColor(float t) {
+  vec3 black = vec3(0.035, 0.03, 0.028);
+  vec3 brown = vec3(0.17, 0.1, 0.06);
+  vec3 fair = vec3(0.5, 0.38, 0.21);
+  vec3 grey = vec3(0.56, 0.56, 0.54);
+  if (t < 0.4) return mix(black, brown, t / 0.4);
+  if (t < 0.75) return mix(brown, fair, (t - 0.4) / 0.35);
+  return mix(fair, grey, (t - 0.75) / 0.25);
+}
+
+void personVertex(out vec3 P, out vec3 N) {
+  int piece = int(aInfo.y + 0.5);
+  int worn = int(iBody.z + 0.5);
+  bool skirt = ((worn >> ${PIECE.skirt - 1}) & 1) == 1;
+  // (the same rule as wears() in src/people/body.ts)
+  bool hidden = piece == ${PIECE.thighs} ? skirt : (piece > 0 && ((worn >> (piece - 1)) & 1) == 0);
+  if (iBody.x <= 0.0 || hidden) {
+    // nobody here, or a piece this person is not wearing: its triangles shrink to a point
+    P = iPosYaw.xyz; N = vec3(0.0, 1.0, 0.0);
+    vColorV = vec3(0.0); vTone = vec3(0.0); vFabric = P; vUp = 0.0;
+    return;
+  }
+  vec3 local = position + aMorph * iBody.y;
+  vec3 nrm = normal;
+  // the head turns on the neck, then the whole body is posed
+  float turn = iAnim.w * aSkin.w;
+  if (abs(turn) > 0.001) {
+    const vec3 neck = vec3(0.0, 0.0, -0.01);
+    local = rotY(local - neck, turn) + neck;
+    nrm = rotY(nrm, turn);
+  }
+  vec4 r0; vec4 r1; vec4 r2;
+  poseAt(iAnim.x, r0, r1, r2);
+  if (iAnim.z > 0.004) {
+    vec4 s0; vec4 s1; vec4 s2;
+    poseAt(iAnim.y, s0, s1, s2);
+    r0 = mix(r0, s0, iAnim.z); r1 = mix(r1, s1, iAnim.z); r2 = mix(r2, s2, iAnim.z);
+  }
+  vec4 lp = vec4(local, 1.0);
+  vec3 posed = vec3(dot(r0, lp), dot(r1, lp), dot(r2, lp));
+  nrm = normalize(vec3(dot(r0.xyz, nrm), dot(r1.xyz, nrm), dot(r2.xyz, nrm)));
+
+  vec3 fab = iPosYaw.xyz + rotY(posed * iBody.x, iPosYaw.w);
+  nrm = rotY(nrm, iPosYaw.w);
+  float decay = limboDecay(iPosYaw.xz, 0.6);
+  fab.y -= decay * 14.0;
+  fab.y += ripple(iPosYaw.xz);
+
+  // what the vertex is made of decides its colour
+  int part = int(aInfo.x + 0.5);
+  bool shirt = ((worn >> ${PIECE.shirtFront - 1}) & 1) == 1;
+  vec3 skin = mix(vec3(0.84, 0.66, 0.54), vec3(0.29, 0.18, 0.12), iColA.w);
+  vec3 col = iColA.rgb;
+  float rough = 0.84;
+  float head = 0.0;
+  if (part == ${PART.trousers}) col = skirt ? mix(skin * 0.94, vec3(0.03), iColC.w) : iColB.rgb;
+  else if (part == ${PART.shirt}) col = shirt ? vec3(0.84, 0.83, 0.79) : iColA.rgb;
+  else if (part == ${PART.tie}) col = iColC.rgb;
+  else if (part == ${PART.skin}) { col = skin; rough = 0.62; head = step(1.45, position.y); }
+  else if (part == ${PART.hair}) { col = hairColor(iColB.w); rough = 0.72; head = 1.0; }
+  else if (part == ${PART.shoes}) { col = vec3(0.035, 0.032, 0.03); rough = 0.4; }
+  else if (part == ${PART.hat}) { col = iColA.rgb * 0.55 + 0.012; head = 1.0; }
+  else if (part == ${PART.bag}) { col = mix(vec3(0.05, 0.045, 0.04), vec3(0.19, 0.105, 0.05), step(0.5, fract(iColB.w * 7.31))); rough = 0.5; }
+  else if (part == ${PART.skirt}) col = iColB.rgb;
+
+  vColorV = col;
+  vTone = vec3(head, iBody.w, rough);
+  vFabric = fab;
+  vUp = posed.y;
+  P = fab;
+  N = nrm;
+  applyFolds(iPosYaw.xz, P, N);
+}
+`;
+
+export const PERSON_FRAG_HEAD = /* glsl */ `
+varying vec3 vColorV;
+varying vec3 vTone;
+varying vec3 vFabric;
+varying float vUp;
+uniform vec4 uLook;      // ambient occlusion strength, night glow strength (src/world/look.ts)
+`;
+
+export const PERSON_FRAG_COLOR = /* glsl */ `
+#include <color_fragment>
+diffuseColor.rgb = vColorV;
+// someone who has noticed the dreamer reddens, and a hunter's face glows
+float personS = vTone.y;
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.35, 0.03, 0.03), smoothstep(0.35, 1.0, personS));
+vec3 personGlow = vec3(0.9, 0.08, 0.05) * smoothstep(0.7, 1.0, personS) * (vTone.x > 0.5 ? 1.2 : 0.15);
+// Ambient occlusion: darkest where the feet meet the pavement, and a little under the chin and the hem
+float personAO = mix(0.5, 1.0, smoothstep(0.0, 0.5, vUp));
+`;
+export const PERSON_FRAG_ROUGH = /* glsl */ `
+#include <roughnessmap_fragment>
+roughnessFactor = vTone.z;
+`;
+export const PERSON_FRAG_EMISSIVE = /* glsl */ `
+#include <emissivemap_fragment>
+totalEmissiveRadiance += personGlow;
+`;
+export const PERSON_FRAG_AO = /* glsl */ `
+#include <aomap_fragment>
+{
+  float skyAO = mix(1.0, personAO, uLook.x);
   reflectedLight.indirectDiffuse *= skyAO;
   reflectedLight.indirectSpecular *= mix(1.0, skyAO, 0.7);
 }

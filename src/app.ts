@@ -35,11 +35,13 @@ const PUBLIC_URL = 'https://msavastano.github.io/Inception-City/';
 // shards: pieces of wall the café explosion throws when stability hits zero
 // relief: how far away (metres) the window reveals have faded out (0 = flat walls, as they were before the relief)
 // detail: how far away (metres) the scanned surface detail has faded out (0 = none: the surfaces are painted only)
-const QUALITY: Record<QualityName, { pr: number; shadow: number; extent: number; bloom: boolean; view: number; props: number; chunks: number; crowd: number; mirror: number; shards: number; relief: number; detail: number }> = {
-  ultra: { pr: 2, shadow: 4096, extent: 460, bloom: true, view: 1300, props: 650, chunks: 150, crowd: 900, mirror: 0.5, shards: 7000, relief: 64, detail: 56 },
-  high: { pr: 1.5, shadow: 2048, extent: 380, bloom: true, view: 1050, props: 480, chunks: 120, crowd: 600, mirror: 0.5, shards: 5000, relief: 48, detail: 46 },
-  medium: { pr: 1, shadow: 2048, extent: 320, bloom: true, view: 820, props: 360, chunks: 90, crowd: 400, mirror: 0.35, shards: 3200, relief: 38, detail: 36 },
-  low: { pr: 0.75, shadow: 0, extent: 260, bloom: false, view: 620, props: 240, chunks: 60, crowd: 180, mirror: 0, shards: 1600, relief: 0, detail: 0 },
+// trees: how far away (metres) a tree has finished turning from its near version (every branch and leaf card) to
+//   its far one (trunk, limbs and a few big cards); 0 = far version only
+const QUALITY: Record<QualityName, { pr: number; shadow: number; extent: number; bloom: boolean; view: number; props: number; chunks: number; crowd: number; mirror: number; shards: number; relief: number; detail: number; trees: number }> = {
+  ultra: { pr: 2, shadow: 4096, extent: 460, bloom: true, view: 1300, props: 650, chunks: 150, crowd: 900, mirror: 0.5, shards: 7000, relief: 64, detail: 56, trees: 100 },
+  high: { pr: 1.5, shadow: 2048, extent: 380, bloom: true, view: 1050, props: 480, chunks: 120, crowd: 600, mirror: 0.5, shards: 5000, relief: 48, detail: 46, trees: 80 },
+  medium: { pr: 1, shadow: 2048, extent: 320, bloom: true, view: 820, props: 360, chunks: 90, crowd: 400, mirror: 0.35, shards: 3200, relief: 38, detail: 36, trees: 60 },
+  low: { pr: 0.75, shadow: 0, extent: 260, bloom: false, view: 620, props: 240, chunks: 60, crowd: 180, mirror: 0, shards: 1600, relief: 0, detail: 0, trees: 0 },
 };
 /** Instability at which the dream collapses (the HUD reads 0% stability). */
 const COLLAPSE_AT = 0.995;
@@ -101,6 +103,10 @@ export class App implements DreamContext {
   readonly hallway = new Hallway();
   /** Settles once the surface detail has loaded or failed (at once while no tier has asked for it). */
   detailReady: Promise<boolean> = Promise.resolve(false);
+  /** Resolves once the trees' leaves have been drawn (just after the first frame). */
+  get treesReady(): Promise<void> {
+    return this.streamer.trees.ready;
+  }
   readonly collapse = new Collapse(QUALITY.ultra.shards);
   readonly marks: HeistMarks;
   readonly guards: Projections;
@@ -1055,6 +1061,7 @@ export class App implements DreamContext {
     U.uDetail.value.set(Math.min(LOOK.detail, 2.5), Math.min(LOOK.detail, 1.5), q.detail * 0.6, q.detail);
     if (detail) this.detailReady = loadSurfaceDetail(Math.min(4, this.renderer.capabilities.getMaxAnisotropy()));
     this.streamer.limit = q.chunks;
+    this.streamer.trees.nearDist = q.trees * LOOK.trees;
     // the modelled hallway on every tier but Low, which keeps the painted box (and its cost)
     this.hallway.useModel(name !== 'low' && LOOK.hall > 0);
     this.audio.setSpatial(name !== 'low');
@@ -1161,6 +1168,7 @@ export class App implements DreamContext {
     this.env.fog.near = view * 0.66;
     this.env.fog.far = view * 0.97;
     this.streamer.update(this.camera.position, focus.x, focus.z, this.folds.active, this.folds.folds, view, q.props, this.time);
+    this.streamer.updateTrees(this.camera.position, this.folds.active);
     this.halos.update(this.env.night * LOOK.glow, (level.haze + level.mist) * LOOK.haze, this.env.fog.near, this.env.fog.far);
 
     // Dream stability.

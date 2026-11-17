@@ -16,6 +16,7 @@ import {
 } from '../core/config';
 import { PART, PIECE } from '../people/body';
 import { DETAIL } from './detail/manifest';
+import { SHAPES } from './trees';
 
 const f = (n: number) => n.toFixed(4);
 
@@ -1184,14 +1185,15 @@ float checker(vec2 p, vec2 w) {
 }
 // How much of the sky's light reaches this pixel (ambient occlusion), 1 in the open.
 float gAO = 1.0;
-// The shade under a tree: a soft pool below the crown and a tight one round the trunk. d2: squared metres from the trunk.
-float crownShade(float d2) { return 0.3 * exp(-d2 / 7.0) + 0.35 * exp(-d2 / 0.25); }
-// Boulevard trees stand in a row down each side (see BOULEVARD_TREES in src/core/config.ts).
+// The shade under a tree: a broad, soft pool below the crown (r2: its squared radius) and a tight one round the trunk.
+float crownShade(vec2 trunk, vec2 crown, float r2) { return 0.3 * exp(-dot(crown, crown) / r2) + 0.35 * exp(-dot(trunk, trunk) / 0.25); }
+// Boulevard trees stand in a row down each side (see BOULEVARD_TREES in src/core/config.ts), their crowns
+// leaning out over the road (SHAPES in src/city/trees.ts).
 float boulevardTrees(float lateral, float along) {
   float a = mod(along, ${f(BLOCK)});
   float nearest = clamp(floor((a - ${f(BOULEVARD_TREES.first)}) / ${f(BOULEVARD_TREES.step)} + 0.5), 0.0, ${f(BOULEVARD_TREES.count - 1)}) * ${f(BOULEVARD_TREES.step)} + ${f(BOULEVARD_TREES.first)};
   vec2 d = vec2(lateral - ${f(BOULEVARD_HALF - BOULEVARD_TREES.inset)}, a - nearest);
-  return crownShade(dot(d, d));
+  return crownShade(d, d + vec2(${f(SHAPES[0].centre[0] * 1.07)}, 0.0), ${f((SHAPES[0].radii[0] * 1.07) ** 2)});
 }
 // How wet this pixel is (0 dry, 1 soaked) and how much of it is standing water.
 float gWet = 0.0;
@@ -1366,7 +1368,7 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
     if (fine > 0.0) {
       if (hw.x > ${f(BOULEVARD_HALF - 0.5)}) small = boulevardTrees(dl.x, f.y);
       if (hw.y > ${f(BOULEVARD_HALF - 0.5)}) small = max(small, boulevardTrees(dl.y, f.x));
-      if (kind > 1.5 && kind < 2.5) { vec2 t = inb - ${f(PLAZA_TREE_INSET)}; small = max(small, crownShade(dot(t, t))); }
+      if (kind > 1.5 && kind < 2.5) { vec2 t = inb - ${f(PLAZA_TREE_INSET)}; small = max(small, crownShade(t, t, ${f((SHAPES[1].radii[0] * 1.1) ** 2)})); }
       // lamp posts stand a metre in from the building line
       vec2 da = f.yx - (floor((f.yx - ${f(LAMP_OFFSET)}) / ${f(LAMP_SPACING)} + 0.5) * ${f(LAMP_SPACING)} + ${f(LAMP_OFFSET)});
       vec2 dp = inb + 1.0;
@@ -1568,8 +1570,8 @@ totalEmissiveRadiance += groundGlow;
 export const PROP_VERT_HEAD = /* glsl */ `
 attribute vec4 iPosYaw;  // x, y, z, yaw
 attribute vec4 iParam;   // scale, tone, birth time, spin speed
-attribute vec4 iState;   // unused, kind (0 tree, 1 lamp, 3 totem), unused, unused
-attribute float aPart;   // 0 solid, 1 foliage, 2 lamp glass, 5 metal, 6 glowing
+attribute vec4 iState;   // unused, kind (1 lamp, 3 totem; the trees have their own mesh, src/city/treeField.ts), unused, unused
+attribute float aPart;   // 0 solid, 2 lamp glass, 5 metal, 6 glowing
 attribute vec3 aColor;
 varying vec3 vColorV;
 varying float vPart;
@@ -1594,11 +1596,6 @@ void propVertex(out vec3 P, out vec3 N) {
   if (kind < 1.5) {
     float born = smoothstep(iParam.z, iParam.z + 1.4, uTime);
     scale *= born;
-  }
-  if (aPart > 0.5 && aPart < 1.5) {
-    float sway = sin(uTime * 1.3 + iPosYaw.x * 0.11 + iPosYaw.z * 0.07) * 0.12 * position.y / 6.0;
-    local.x += sway;
-    local.z += sway * 0.6;
   }
   float yaw = iPosYaw.w + uTime * iParam.w;
   local = rotY(local * scale, yaw);
@@ -1647,14 +1644,7 @@ float propRough = 0.8;
 vec3 propGlow = vec3(0.0);
 // Ambient occlusion: whatever stands on the pavement is darkest where it meets it
 float propAO = vPart < 0.5 ? mix(0.5, 1.0, smoothstep(0.0, 0.6, vUp)) : 1.0;
-if (vPart > 0.5 && vPart < 1.5) {
-  diffuseColor.rgb = mix(uFoliageA, uFoliageB, vTone.x) * (0.75 + 0.5 * vColorV.g);
-  // the underside of a crown looks at the pavement, not the sky, and little sun gets in there
-  float crown = smoothstep(2.8, 7.2, vUp);
-  propAO = mix(0.42, 1.0, crown);
-  diffuseColor.rgb *= mix(1.0, 0.72 + 0.28 * crown, uLook.x);
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.95, 0.98), uSnow * 0.7);
-} else if (vPart > 1.5 && vPart < 2.5) {
+if (vPart > 1.5 && vPart < 2.5) {
   propGlow = vec3(1.0, 0.78, 0.5) * (0.25 + 3.0 * uNight);
 } else if (vPart > 4.5 && vPart < 5.5) {
   propMetal = 0.9;
@@ -1683,6 +1673,244 @@ export const PROP_FRAG_AO = /* glsl */ `
   float skyAO = mix(1.0, propAO, uLook.x);
   reflectedLight.indirectDiffuse *= skyAO;
   reflectedLight.indirectSpecular *= mix(1.0, skyAO, 0.7);
+}
+`;
+
+// ---------------------------------------------------------------------------
+// Trees: London planes (src/city/trees.ts), a near and a far version (src/city/treeField.ts)
+// ---------------------------------------------------------------------------
+
+export const TREE_VERT_HEAD = /* glsl */ `
+attribute vec4 iTree;    // fabric x, z, yaw, scale (0: nobody here)
+attribute vec4 iLook;    // tone, birth time, seed (0 to 1), shape * 2 + 1 if mirrored
+attribute vec4 aWood;    // part (0 bark, 1 leaves), sky it sees, sway (0 the foot, 1 the top), limb (-1 the trunk)
+attribute vec4 aLeaf;    // atlas u, v, flutter phase, shape (0 boulevard, 1 park)
+#ifdef TREE_FAR
+attribute vec4 aCard;    // a far leaf card's corner, from its centre (metres), and its roll
+#endif
+uniform vec4 uTrees;     // the near version fades out between x and y metres; share of the leaves the season has taken; wind
+uniform vec3 uEye;       // the main camera, so the shadow and the mirror pick the same version it sees
+varying vec2 vUv;
+varying vec4 vTree;      // part, sky, tone, how much of this version shows (0 to 1)
+varying vec3 vFabric;
+varying vec3 vLocal;     // where on the model (metres, before scaling): the bark's pattern
+varying float vUpN;      // how much the surface faces up (snow settles there)
+${FOLD_GLSL}
+
+vec3 treeYaw(vec3 v, float a) { float c = cos(a), s = sin(a); return vec3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z); }
+// Where the sun's shadow is looked up, moved this far from the surface (see treeMaterial in src/city/materials.ts).
+vec3 treeShadowPush = vec3(0.0);
+
+void treeNobody(out vec3 P, out vec3 N) {
+  P = vec3(0.0); N = vec3(0.0, 1.0, 0.0);
+  vUv = vec2(0.0); vTree = vec4(0.0); vFabric = P; vLocal = P; vUpN = 0.0;
+}
+
+void treeVertex(out vec3 P, out vec3 N) {
+  float shape = floor(iLook.w * 0.5 + 0.01);
+  // the geometry holds both shapes: a tree keeps only its own
+  if (iTree.w <= 0.0 || abs(aLeaf.w - shape) > 0.5) { treeNobody(P, N); return; }
+  // which version shows from here: the near one up close, the far one beyond the fade, a dither between
+  vec3 base = vec3(iTree.x, 0.0, iTree.y);
+  vec3 baseN = vec3(0.0, 1.0, 0.0);
+  applyFolds(iTree.xy, base, baseN);
+  float near = 1.0 - smoothstep(uTrees.x, uTrees.y, distance(base, uEye));
+#ifdef TREE_SHADOW
+  near = step(0.5, near);
+#endif
+#ifdef TREE_FAR
+  float show = 1.0 - near;
+#else
+  float show = near;
+#endif
+  if (show <= 0.0) { treeNobody(P, N); return; }
+
+  float scale = iTree.w * smoothstep(iLook.y, iLook.y + 1.4, uTime);
+  vec3 local = position;
+  vec3 nrm = normal;
+  if (fract(iLook.w * 0.5) > 0.25) { local.z = -local.z; nrm.z = -nrm.z; }
+  // Each tree turns and stretches its limbs its own way, so no two in a row are the same.
+  if (aWood.w >= 0.0) {
+    bool bvd = shape < 0.5;
+    float h1 = hash12(vec2(iLook.z * 91.7 + aWood.w * 3.1, aWood.w + 1.3));
+    float h2 = hash12(vec2(aWood.w * 7.1 + 0.5, iLook.z * 53.3));
+    float turn = (h1 - 0.5) * 2.0 * (bvd ? ${f(SHAPES[0].turn)} : ${f(SHAPES[1].turn)});
+    float fork = bvd ? ${f(SHAPES[0].fork)} : ${f(SHAPES[1].fork)};
+    float stretch = 0.9 + 0.2 * h2;
+    local = treeYaw(local, turn);
+    nrm = treeYaw(nrm, turn);
+    local.xz *= stretch;
+    local.y = fork + (local.y - fork) * (0.94 + 0.06 * stretch);
+    // a boulevard tree keeps clear of the facades behind it
+    if (bvd) local.x = max(local.x, ${f(SHAPES[0].back)});
+  }
+  // Wind: the crown leans and comes back; the leaves flutter.
+  float ph = iTree.x * 0.11 + iTree.y * 0.07;
+  float lean = (sin(uTime * 0.9 + ph) * 0.6 + sin(uTime * 2.1 + ph * 1.7) * 0.25) * 0.16 * uTrees.w * aWood.z;
+  if (aWood.x > 0.5) local += nrm * sin(uTime * (5.0 + 3.0 * uTrees.w) + aLeaf.z) * 0.035 * uTrees.w * (0.4 + aWood.z);
+  vLocal = local;
+  vUpN = nrm.y;
+  local = treeYaw(local * scale, iTree.z);
+  nrm = treeYaw(nrm, iTree.z);
+  vec3 fab = vec3(iTree.x, 0.0, iTree.y) + local;
+  fab.xz += vec2(0.8, 0.6) * lean * scale;
+  fab.y -= limboDecay(iTree.xy, 0.6) * 14.0;
+  fab.y += ripple(fab.xz);
+  vUv = aLeaf.xy;
+  vTree = vec4(aWood.x, aWood.y, iLook.x, show);
+  vFabric = fab;
+  P = fab;
+  N = nrm;
+  applyFolds(iTree.xy, P, N);
+#ifdef TREE_FAR
+  // A far leaf card stands at its centre (all four corners do) and is spread out facing the camera.
+  if (aWood.x > 0.5) {
+    float cr = cos(aCard.z), sr = sin(aCard.z);
+    vec2 c = vec2(cr * aCard.x - sr * aCard.y, sr * aCard.x + cr * aCard.y) * scale;
+    vec3 spread = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]) * c.x + vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]) * c.y;
+    P += spread;
+    // and lit as a piece of the round crown it belongs to, not as a flat card
+    N = normalize(N + spread / (4.5 * max(scale, 0.1)));
+    // In the shadow pass the same card turns to face the sun instead, so half of it would lie in its own
+    // shadow, cut off along a straight line. Looking the shadow up a little way out of the crown avoids that,
+    // and the cards on the far side of the crown are still in the shade of those in front.
+    treeShadowPush = N * 1.1 * scale;
+  }
+#endif
+}
+`;
+
+const TREE_FRAG_PARS = /* glsl */ `
+varying vec2 vUv;
+varying vec4 vTree;
+varying vec3 vFabric;
+varying vec3 vLocal;
+varying float vUpN;
+uniform sampler2D tLeaves;  // the leaf atlas (src/city/trees.ts): which leaf, twig, light on the leaf, leaf
+uniform vec4 uTrees;
+`;
+
+export const TREE_FRAG_HEAD = /* glsl */ `
+${TREE_FRAG_PARS}
+uniform float uNight;
+uniform float uSnow;
+uniform vec4 uLook;      // ambient occlusion strength, night glow strength (src/world/look.ts)
+uniform vec3 uFoliageA;
+uniform vec3 uFoliageB;
+float treeHash(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+float treeNoise(vec3 p) {
+  vec3 i = floor(p); vec3 u = fract(p); u = u * u * (3.0 - 2.0 * u);
+  return mix(mix(mix(treeHash(i), treeHash(i + vec3(1, 0, 0)), u.x), mix(treeHash(i + vec3(0, 1, 0)), treeHash(i + vec3(1, 1, 0)), u.x), u.y),
+             mix(mix(treeHash(i + vec3(0, 0, 1)), treeHash(i + vec3(1, 0, 1)), u.x), mix(treeHash(i + vec3(0, 1, 1)), treeHash(i + vec3(1, 1, 1)), u.x), u.y), u.z);
+}
+// A plane tree's bark flakes off in patches: grey-brown, olive, and cream where it is fresh.
+vec3 treeBark(vec3 p) {
+  float n = treeNoise(p * vec3(2.2, 0.8, 2.2)) * 0.62 + treeNoise(p * vec3(6.5, 2.6, 6.5) + 17.0) * 0.38;
+  float w = fwidth(n) + 0.01;
+  vec3 c = mix(vec3(0.3, 0.28, 0.24), vec3(0.44, 0.43, 0.32), smoothstep(0.44 - w, 0.44 + w, n));
+  c = mix(c, vec3(0.66, 0.62, 0.48), smoothstep(0.6 - w, 0.6 + w, n));
+  // greyer up in the crown, where the limbs are thin
+  return mix(c, vec3(0.34, 0.33, 0.3), smoothstep(5.0, 11.0, p.y) * 0.6);
+}
+// Interleaved gradient noise: the dither the near and far versions share out between them.
+float treeDither(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+// The street lamps' light from below, on the crowns at night. The lamps stand a metre in from the building line
+// along every street (see lampWash in the building shader), so the nearest two are found without looking anything up.
+float treeLampLight(vec3 p) {
+  float sum = 0.0;
+  for (int k = 0; k < 2; k++) {
+    float across = k == 0 ? p.x : p.z;
+    float along = k == 0 ? p.z : p.x;
+    float line = floor(across / ${f(BLOCK)} + 0.5);
+    float off = across - line * ${f(BLOCK)};
+    float hw = mod(line, ${f(CHUNK_BLOCKS)}) < 0.5 ? ${f(BOULEVARD_HALF)} : ${f(STREET_HALF)};
+    float lat = abs(off) - (hw - 1.0);
+    float da = along - (floor((along - ${f(LAMP_OFFSET)}) / ${f(LAMP_SPACING)} + 0.5) * ${f(LAMP_SPACING)} + ${f(LAMP_OFFSET)});
+    float dy = p.y - ${f(LANTERN_HEIGHT)};
+    float r2 = lat * lat + da * da + dy * dy;
+    sum += smoothstep(-1.0, 1.5, dy) / (1.0 + r2 * 0.18);
+  }
+  return sum;
+}
+`;
+
+export const TREE_FRAG_COLOR = /* glsl */ `
+#include <color_fragment>
+// the version on its way out leaves a dither pattern that the other one fills
+#ifdef TREE_FAR
+if (treeDither(gl_FragCoord.xy) < 1.0 - vTree.w) discard;
+#else
+if (treeDither(gl_FragCoord.xy) >= vTree.w) discard;
+#endif
+float treeSky = vTree.y;
+float treeRough = 0.92;
+vec3 treeAlbedo;
+bool treeLeafy = vTree.x > 0.5;
+if (!treeLeafy) {
+  treeAlbedo = treeBark(vLocal);
+  diffuseColor.a = 1.0;
+} else {
+  vec4 lt = texture2D(tLeaves, vUv);
+  // the season takes some of the leaves (all of them in the snow); the twigs stay
+  float keep = smoothstep(uTrees.z - 0.06, uTrees.z + 0.06, lt.r);
+  float leafA = lt.a * keep;
+  vec3 green = mix(uFoliageA, uFoliageB, clamp(vTree.z * 0.55 + (lt.r - 0.5) * 0.9 + 0.22, 0.0, 1.0));
+  green *= 0.5 + 0.72 * lt.b;
+  treeAlbedo = leafA >= lt.g ? green : vec3(0.15, 0.13, 0.11);
+  diffuseColor.a = max(leafA, lt.g);
+  treeRough = 0.78;
+}
+// snow settles on whatever faces up
+treeAlbedo = mix(treeAlbedo, vec3(0.92, 0.94, 0.97), uSnow * smoothstep(0.15, 0.7, vUpN) * (treeLeafy ? 0.55 : 0.85));
+diffuseColor.rgb = treeAlbedo;
+vec3 treeGlow = vec3(0.0);
+#if NUM_DIR_LIGHTS > 0
+if (treeLeafy) {
+  // the sun through the leaves, seen from underneath or against the light
+  vec3 tV = normalize(vViewPosition);
+  float through = max(dot(-tV, directionalLights[0].direction), 0.0);
+  treeGlow += treeAlbedo * directionalLights[0].color * (through * through * through) * 0.16 * treeSky;
+}
+#endif
+// the lamps light the crowns from below at night
+if (uNight > 0.01 && vFabric.y < 14.0) treeGlow += treeAlbedo * vec3(1.0, 0.72, 0.42) * treeLampLight(vFabric) * uNight * 2.2 * uLook.y;
+`;
+export const TREE_FRAG_ROUGH = /* glsl */ `
+#include <roughnessmap_fragment>
+roughnessFactor = treeRough;
+`;
+export const TREE_FRAG_NORMAL = /* glsl */ `
+#include <normal_fragment_maps>
+// a leaf card is lit the same from either side: its normal is the crown's, not the card's
+if (treeLeafy) normal = normalize(vNormal);
+`;
+export const TREE_FRAG_EMISSIVE = /* glsl */ `
+#include <emissivemap_fragment>
+totalEmissiveRadiance += treeGlow;
+`;
+export const TREE_FRAG_AO = /* glsl */ `
+#include <aomap_fragment>
+{
+  float skyAO = mix(1.0, treeSky, uLook.x);
+  reflectedLight.indirectDiffuse *= skyAO;
+  reflectedLight.indirectSpecular *= mix(1.0, skyAO, 0.8);
+}
+`;
+
+/**
+ * The shadow pass: leaves cast the shade of their clusters, read from a smaller mip level than the eye sees so
+ * that it does not sparkle as they sway (a shadow-map texel is about a third of a metre).
+ */
+export const TREE_DEPTH_FRAG_HEAD = TREE_FRAG_PARS;
+export const TREE_DEPTH_FRAG_TEST = /* glsl */ `
+if (vTree.x > 0.5) {
+#ifdef TREE_FAR
+  vec4 lt = textureLod(tLeaves, vUv, 3.0);
+#else
+  vec4 lt = textureLod(tLeaves, vUv, 4.0);
+#endif
+  float keep = smoothstep(uTrees.z - 0.06, uTrees.z + 0.06, lt.r);
+  if (max(lt.a * keep, lt.g) < 0.5) discard;
 }
 `;
 

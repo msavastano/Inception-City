@@ -34,6 +34,9 @@ export interface DreamLevel {
   weather: Weather;
   foliageA: number;
   foliageB: number;
+  /** The plane trees: the share of their leaves the season has taken (0 summer, 1 bare), and how hard the wind blows (1 a breeze). */
+  leafFall: number;
+  wind: number;
   sea: number;
   /**
    * The air. haze: how much a kilometre of clear air fades what is behind it (1 leaves about a third showing).
@@ -89,6 +92,8 @@ export const LEVELS: DreamLevel[] = [
     weather: 'none',
     foliageA: 0x3a5a22,
     foliageB: 0x6b8a34,
+    leafFall: 0,
+    wind: 1,
     sea: 0x52616b,
     haze: 0.6,
     mist: 0.6,
@@ -123,6 +128,8 @@ export const LEVELS: DreamLevel[] = [
     weather: 'rain',
     foliageA: 0x6a4a1c,
     foliageB: 0xa8642a,
+    leafFall: 0.35,
+    wind: 1.6,
     sea: 0x3c4a52,
     haze: 1.6,
     mist: 2.4,
@@ -157,6 +164,8 @@ export const LEVELS: DreamLevel[] = [
     weather: 'snow',
     foliageA: 0x2e4a3a,
     foliageB: 0x46604c,
+    leafFall: 0.85,
+    wind: 0.5,
     sea: 0x6a7884,
     haze: 2.2,
     mist: 1.6,
@@ -191,6 +200,8 @@ export const LEVELS: DreamLevel[] = [
     weather: 'ash',
     foliageA: 0x4a4a42,
     foliageB: 0x6a665a,
+    leafFall: 0.55,
+    wind: 0.3,
     sea: 0x4f5a5e,
     haze: 0.55,
     mist: 0.9,

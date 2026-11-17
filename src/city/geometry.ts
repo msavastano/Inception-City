@@ -37,15 +37,6 @@ function merge(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
   return g;
 }
 
-export function treeGeometry(): THREE.BufferGeometry {
-  const trunk = tag(new THREE.CylinderGeometry(0.16, 0.26, 3.4, 5, 1, true).translate(0, 1.7, 0), 0, [0.25, 0.18, 0.12]);
-  let s = 1;
-  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
-  const crownA = tag(new THREE.IcosahedronGeometry(2.4, 0).scale(1, 1.15, 1).translate(0, 5.0, 0), 1, () => [0, 0.3 + rnd() * 0.5, 0]);
-  const crownB = tag(new THREE.IcosahedronGeometry(1.7, 0).translate(0.8, 6.3, -0.4), 1, () => [0, 0.5 + rnd() * 0.5, 0]);
-  return merge([trunk, crownA, crownB]);
-}
-
 export function lampGeometry(): THREE.BufferGeometry {
   const iron: [number, number, number] = [0.07, 0.09, 0.08];
   const post = tag(new THREE.CylinderGeometry(0.07, 0.13, 4.6, 5, 1, true).translate(0, 2.3, 0), 0, iron);

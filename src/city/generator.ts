@@ -48,6 +48,8 @@ export interface PropRec {
   scale: number;
   /** 0..1 variation used for colour. */
   tone: number;
+  /** Trees only: 0 a boulevard tree (pruned flat on its facade side, its yaw turning that side to the buildings), 1 a park tree. */
+  shape?: number;
 }
 
 export interface Rect {
@@ -192,8 +194,13 @@ export function generateChunk(cx: number, cz: number, seed: number): ChunkData {
       const a = k * BLOCK + BOULEVARD_TREES.first + t * BOULEVARD_TREES.step;
       for (const side of [-1, 1]) {
         const tone = bRand();
-        addTree({ x: cx * CHUNK + side * lat, z: cz * CHUNK + a, yaw: bRand() * 6.28, scale: 0.9 + tone * 0.35, tone });
-        addTree({ x: cx * CHUNK + a, z: cz * CHUNK + side * lat, yaw: bRand() * 6.28, scale: 0.9 + tone * 0.35, tone });
+        // a boulevard tree's model leans out over the road along its +x and is flat behind (towards the buildings):
+        // turn +x towards the boulevard's centre line, give or take a little (not so much that the flat back
+        // turns its edge into the facade; the trees differ by their limbs instead, in the shader)
+        const jx = (bRand() - 0.5) * 0.1;
+        const jz = (bRand() - 0.5) * 0.1;
+        addTree({ x: cx * CHUNK + side * lat, z: cz * CHUNK + a, yaw: (side < 0 ? 0 : Math.PI) + jx, scale: 0.9 + tone * 0.35, tone, shape: 0 });
+        addTree({ x: cx * CHUNK + a, z: cz * CHUNK + side * lat, yaw: side * (Math.PI / 2) + jz, scale: 0.9 + tone * 0.35, tone, shape: 0 });
       }
     }
   }
@@ -363,7 +370,7 @@ function parkBlock(rect: Rect, rand: () => number, addTree: (t: PropRec) => void
     const v = z - cz;
     if (Math.abs(Math.abs(u) - Math.abs(v)) < 3.5 || Math.hypot(u, v) < 9) continue;
     const tone = rand();
-    addTree({ x, z, yaw: rand() * 6.28, scale: 0.85 + rand() * 0.7, tone });
+    addTree({ x, z, yaw: rand() * 6.28, scale: 0.85 + rand() * 0.7, tone, shape: 1 });
   }
 }
 
@@ -376,7 +383,7 @@ function plazaBlock(rect: Rect, rand: () => number, addTree: (t: PropRec) => voi
     [rect.x1 - inset, rect.z1 - inset],
   ]) {
     const tone = rand();
-    addTree({ x, z, yaw: rand() * 6.28, scale: 1.1, tone });
+    addTree({ x, z, yaw: rand() * 6.28, scale: 1.1, tone, shape: 1 });
   }
 }
 

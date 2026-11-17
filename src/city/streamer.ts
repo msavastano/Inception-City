@@ -3,9 +3,10 @@ import { CHUNK, GROUND_COARSE_SEGMENTS, GROUND_FINE_SEGMENTS, SLAB } from '../co
 import { Fold, FoldShape, foldPoint } from '../core/fold';
 import { hash3 } from '../core/rng';
 import { BuildingRec, ChunkData, generateChunk } from './generator';
-import { buildingGeometry, groundGeometry, lampGeometry, treeGeometry } from './geometry';
+import { buildingGeometry, groundGeometry, lampGeometry } from './geometry';
 import { foldedDepthMaterial, foldedMaterial, pickMaterial } from './materials';
 import { SlabPool } from './pool';
+import { TreeField } from './treeField';
 
 /** A building's box as it is drawn (brush edits applied), for effects that need its walls. */
 export interface BuildingBox {
@@ -34,6 +35,8 @@ interface LoadedChunk {
   fine: boolean;
   /** Detail ring: trees and street furniture are only kept on nearby chunks. */
   props: boolean;
+  /** When the street furniture last came out (it grows in from then). */
+  propsBorn: number;
   born: number;
 }
 
@@ -59,7 +62,8 @@ export class CityStreamer {
 
   readonly buildings: SlabPool;
   readonly roofs: SlabPool;
-  readonly trees: SlabPool;
+  /** The plane trees (src/city/treeField.ts): a near and a far version, each one instanced list. */
+  readonly trees = new TreeField();
   readonly lamps: SlabPool;
   readonly groundFine: SlabPool;
   readonly groundCoarse: SlabPool;
@@ -84,7 +88,6 @@ export class CityStreamer {
 
     this.buildings = new SlabPool(buildingGeometry(6), bAttrs, SLAB.building, maxChunks, this.buildingMaterial);
     this.roofs = new SlabPool(buildingGeometry(1), bAttrs, SLAB.roof, maxChunks, this.buildingMaterial);
-    this.trees = new SlabPool(treeGeometry(), pAttrs, SLAB.tree, maxChunks, this.propMaterial);
     this.lamps = new SlabPool(lampGeometry(), pAttrs, SLAB.lamp, maxChunks, this.propMaterial);
     this.groundFine = new SlabPool(groundGeometry(GROUND_FINE_SEGMENTS), gAttrs, 1, maxChunks, this.groundMaterial);
     this.groundCoarse = new SlabPool(groundGeometry(GROUND_COARSE_SEGMENTS), gAttrs, 1, maxChunks, this.groundMaterial);
@@ -92,7 +95,6 @@ export class CityStreamer {
     for (const [pool, depth, cast] of [
       [this.buildings, bDepth, true],
       [this.roofs, bDepth, true],
-      [this.trees, this.propDepth, true],
       [this.lamps, this.propDepth, false],
       [this.groundFine, gDepth, true],
       [this.groundCoarse, gDepth, true],
@@ -102,6 +104,7 @@ export class CityStreamer {
       pool.mesh.receiveShadow = true;
       this.group.add(pool.mesh);
     }
+    this.group.add(this.trees.group);
 
     const bPick = pickMaterial('building', 2);
     const gPick = pickMaterial('ground', 1);
@@ -135,6 +138,11 @@ export class CityStreamer {
       if (this.cache.size > 64) this.cache.delete(this.cache.keys().next().value!);
     }
     return d;
+  }
+
+  /** Every frame: which trees the eye is close enough to for their near version (folds move them about). */
+  updateTrees(eye: THREE.Vector3, folds: readonly FoldShape[]): void {
+    this.trees.update(this.loaded.values(), folds, eye);
   }
 
   /** Drop everything (used when the dream is re-seeded). */
@@ -231,8 +239,8 @@ export class CityStreamer {
     const data = this.chunkData(cx, cz);
     const slot = this.buildings.acquire();
     if (slot < 0) return;
-    for (const pool of [this.roofs, this.trees, this.lamps]) pool.claim(slot);
-    const chunk: LoadedChunk = { key: key(cx, cz), cx, cz, slot, data, fine: false, props: false, born };
+    for (const pool of [this.roofs, this.lamps]) pool.claim(slot);
+    const chunk: LoadedChunk = { key: key(cx, cz), cx, cz, slot, data, fine: false, props: false, propsBorn: born, born };
     this.loaded.set(chunk.key, chunk);
 
     const grow = (i: number) => this.edits.get(`${cx},${cz},${i}`) ?? 1;
@@ -274,9 +282,10 @@ export class CityStreamer {
       pool.clearFrom(c.slot, on ? list.length : 0);
       pool.flush(c.slot);
     };
-    writeP(this.trees, c.data.trees, 0);
     writeP(this.lamps, c.data.lamps, 1);
     c.props = on;
+    c.propsBorn = born;
+    this.trees.changed();
   }
 
   private writeGround(c: LoadedChunk, fine: boolean, born: number, initial = false): void {
@@ -295,8 +304,9 @@ export class CityStreamer {
   private unload(k: string): void {
     const c = this.loaded.get(k);
     if (!c) return;
-    for (const pool of [this.buildings, this.roofs, this.trees, this.lamps, this.groundFine, this.groundCoarse]) pool.release(c.slot);
+    for (const pool of [this.buildings, this.roofs, this.lamps, this.groundFine, this.groundCoarse]) pool.release(c.slot);
     this.loaded.delete(k);
+    if (c.props) this.trees.changed();
   }
 
   /**

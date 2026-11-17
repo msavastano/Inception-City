@@ -106,6 +106,15 @@ const VIEWS = [
   { id: 'brick-close', extra: true, note: 'Close: an old-town brick wall', level: 1, at: [-86, 131.5, 0.2, 0.15] },
   { id: 'concrete-close', extra: true, note: 'Close: a concrete front', level: 1, at: [-290, -124.5, 0.2, 0.12] },
   { id: 'rain-close', extra: true, note: 'Close: wet paving and asphalt in the rain', level: 2, at: [9.5, -140, 0.1, -0.4] },
+  // The trees: a boulevard's double row, a park, a plaza, under a crown, and from above where the near and far versions meet.
+  { id: 'boulevard', extra: true, note: 'A boulevard and its plane trees, from the middle of the road', level: 1, at: [3, -175, 0, 0.1] },
+  { id: 'canopy', extra: true, note: 'Under a boulevard tree, looking up into the crown', level: 1, at: [10.8, -154, 0.15, 0.75] },
+  { id: 'park', extra: true, note: 'Inside a park', level: 1, at: [270, 18, 0.9, 0.08] },
+  { id: 'plaza', extra: true, note: 'A plaza and its four corner trees', level: 1, at: [22, 136, 0.75, 0.12] },
+  { id: 'trees-above', extra: true, note: 'A boulevard from a rooftop: near trees and far ones', level: 1, cam: { pos: [42, 34, -290], target: [0, 4, -150] } },
+  { id: 'boulevard-night', extra: true, note: 'The boulevard at midnight, under the lamps', level: 1, time: 1, at: [3, -175, 0, 0.1] },
+  { id: 'boulevard-autumn', extra: true, note: 'Level 2: the boulevard in autumn', level: 2, at: [3, -175, 0, 0.1] },
+  { id: 'boulevard-snow', extra: true, note: 'Level 3: the boulevard in snow', level: 3, at: [3, -175, 0, 0.1] },
   { id: 'crowd', extra: true, note: 'Pedestrians at a busy crossing', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, frames: 40 },
   { id: 'stares', extra: true, note: 'The dream unsteady: the crowd stops and stares', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, unstable: 0.55, frames: 160, dt: 0.05 },
 ];
@@ -166,6 +175,7 @@ async function shoot([v, time, settle]) {
   // wait for anything still loading (the hallway's model and the surface detail; builds before them have none)
   await d.hallway.ready;
   await d.detailReady;
+  await d.treesReady;
   // and, with --settle, until that many milliseconds after the page opened, so that a build which has more to load
   // and one which has less start the view at the same moment (the city runs on its own clock while it waits)
   const wait = (settle ?? 0) - performance.now();

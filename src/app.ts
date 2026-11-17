@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { COLLAPSE_RADIUS, MAX_FOLDS } from './core/config';
 import { Fold, FoldStack, foldPoint } from './core/fold';
 import { totemGeometry } from './city/geometry';
-import { U } from './city/materials';
+import { U, setWallRelief } from './city/materials';
 import { CityStreamer } from './city/streamer';
 import { DreamAudio, Heard } from './fx/audio';
 import { CROWD_VOICES, CrowdVoice, crowdVoices, Footfall, footing, Scene, toEar } from './fx/soundscape';
@@ -32,11 +32,12 @@ const PUBLIC_URL = 'https://msavastano.github.io/Inception-City/';
 
 // mirror: resolution of the wet-street reflection as a fraction of the screen (0 = lamp glints only)
 // shards: pieces of wall the café explosion throws when stability hits zero
-const QUALITY: Record<QualityName, { pr: number; shadow: number; extent: number; bloom: boolean; view: number; props: number; chunks: number; crowd: number; mirror: number; shards: number }> = {
-  ultra: { pr: 2, shadow: 4096, extent: 460, bloom: true, view: 1300, props: 650, chunks: 150, crowd: 900, mirror: 0.5, shards: 7000 },
-  high: { pr: 1.5, shadow: 2048, extent: 380, bloom: true, view: 1050, props: 480, chunks: 120, crowd: 600, mirror: 0.5, shards: 5000 },
-  medium: { pr: 1, shadow: 2048, extent: 320, bloom: true, view: 820, props: 360, chunks: 90, crowd: 400, mirror: 0.35, shards: 3200 },
-  low: { pr: 0.75, shadow: 0, extent: 260, bloom: false, view: 620, props: 240, chunks: 60, crowd: 180, mirror: 0, shards: 1600 },
+// relief: how far away (metres) the window reveals have faded out (0 = flat walls, as they were before the relief)
+const QUALITY: Record<QualityName, { pr: number; shadow: number; extent: number; bloom: boolean; view: number; props: number; chunks: number; crowd: number; mirror: number; shards: number; relief: number }> = {
+  ultra: { pr: 2, shadow: 4096, extent: 460, bloom: true, view: 1300, props: 650, chunks: 150, crowd: 900, mirror: 0.5, shards: 7000, relief: 64 },
+  high: { pr: 1.5, shadow: 2048, extent: 380, bloom: true, view: 1050, props: 480, chunks: 120, crowd: 600, mirror: 0.5, shards: 5000, relief: 48 },
+  medium: { pr: 1, shadow: 2048, extent: 320, bloom: true, view: 820, props: 360, chunks: 90, crowd: 400, mirror: 0.35, shards: 3200, relief: 38 },
+  low: { pr: 0.75, shadow: 0, extent: 260, bloom: false, view: 620, props: 240, chunks: 60, crowd: 180, mirror: 0, shards: 1600, relief: 0 },
 };
 /** Instability at which the dream collapses (the HUD reads 0% stability). */
 const COLLAPSE_AT = 0.995;
@@ -1041,6 +1042,9 @@ export class App implements DreamContext {
     this.post.setSize(window.innerWidth, window.innerHeight, pr);
     this.post.bloom.enabled = q.bloom;
     this.env.mirrorScale = q.mirror;
+    // Low (and #relief=0) compile the relief out of the building shader altogether
+    setWallRelief(q.relief > 0 && LOOK.relief > 0);
+    U.uRelief.value.set(Math.min(LOOK.relief, 2), Math.min(LOOK.relief, 1.5), q.relief * 0.7, q.relief);
     this.streamer.limit = q.chunks;
     this.audio.setSpatial(name !== 'low');
     const sun = this.env.sun;

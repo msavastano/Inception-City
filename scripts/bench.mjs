@@ -10,7 +10,16 @@
 // Playwright (npm i -D playwright && npx playwright install chromium); it is not a
 // dependency of the game. Without a GPU, Chromium falls back to a software renderer:
 // the pictures are the same, the frame times are not, so the bench reports draw calls,
-// triangles and memory, never milliseconds.
+// triangles and memory, and milliseconds only when asked:
+//
+//   node scripts/bench.mjs --gpu --time --channel msedge       on a machine with a graphics card
+//
+// --gpu asks for the real graphics card instead of the software renderer, --channel uses an
+// installed browser (msedge, chrome) instead of Playwright's own, and --time draws each view
+// forty more times and reports the average frame in milliseconds. Every row records which
+// renderer drew it, so a time from the software renderer cannot be mistaken for a real one.
+// A frame time moves from one page load to the next by more than a small change costs, so
+// --repeat 3 loads each view three times and reports the middle time and the spread.
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -51,6 +60,14 @@ const VIEWS = [
   { id: 'overhead', extra: true, note: 'Under the Paris Fold, looking up at its far edge', level: 1, folds: PARIS, at: [10.2, 60, 0, 0.75] },
   { id: 'night-fold', extra: true, note: 'The Paris Fold at night', level: 1, time: 1, folds: PARIS, cam: { pos: [0, 22, -150], target: [0, 78, 250] } },
   { id: 'courtyard', extra: true, note: 'Level 1, looking down into the blocks', level: 1, cam: { pos: [150, 120, -40], target: [96, 0, 60] } },
+  { id: 'facade', extra: true, note: 'A sunlit Haussmann front from across the street', level: 1, at: [18, 58.5, 0.25, 0.22] },
+  { id: 'windows', extra: true, note: 'Along a sunlit Haussmann front from its own sidewalk', level: 1, at: [5, 68, 1.05, 0.3] },
+  { id: 'brick', extra: true, note: 'A sunlit old-town brick front', level: 1, at: [-86, 123, 0.2, 0.2] },
+  { id: 'concrete', extra: true, note: 'A sunlit concrete front with ribbon windows', level: 1, at: [-290, -134, 0.2, 0.2] },
+  { id: 'glass', extra: true, note: 'The foot of a glass tower', level: 1, at: [-150, 318, 0.15, 0.4] },
+  { id: 'facade-night', extra: true, note: 'The same Haussmann front at midnight', level: 1, time: 1, at: [18, 58.5, 0.25, 0.22] },
+  { id: 'roofline', extra: true, note: 'A cornice, a mansard and its dormers from across the street', level: 1, cam: { pos: [6, 30, 56], target: [22, 25, 74] } },
+  { id: 'blast', extra: true, note: 'The café explosion, three seconds in', level: 1, at: [18, 58.5, 0.25, 0.22], blast: 1.5 },
   { id: 'third', extra: true, note: 'Behind the dreamer on a street', level: 1, third: true, at: [69.5, -120, 0, 0.06] },
   { id: 'behind-circus', extra: true, note: 'Behind the dreamer, crossing the Circus', level: 1, third: true, at: [-9, -62, 0.12, 0.16], keys: ['KeyW'], frames: 34, phase: 0.3 },
   {
@@ -90,6 +107,10 @@ function args() {
     size: get('size', '1280x720').split('x').map(Number),
     phone: a.includes('--phone'),
     hash: get('hash', ''),
+    time: a.includes('--time'),
+    repeat: Math.max(1, Number(get('repeat', '1')) || 1),
+    gpu: a.includes('--gpu'),
+    channel: get('channel', ''),
     compare: compare >= 0 ? [resolve(a[compare + 1]), resolve(a[compare + 2])] : null,
   };
 }
@@ -120,7 +141,7 @@ function serve(dir) {
 }
 
 /** Runs in the page: set the view up, fast-forward until the city has streamed in, draw one frame. */
-function shoot(v) {
+function shoot([v, time]) {
   const d = window.dream;
   d.audio.start = () => {};
   d.start(v.at ? 'walk' : 'architect');
@@ -154,6 +175,11 @@ function shoot(v) {
     d.crowd.opts.spread = v.gather;
     d.crowd.scatter(v.at[0], v.at[1], 5);
   }
+  if (v.blast) {
+    // stability hits zero: let the wave run for a while before the shot
+    d.blowUp();
+    d.step(Math.round(v.blast / 0.05), 0.05, false);
+  }
   if (v.keys || v.gather) {
     // let things move: keys held down for the walker, time for the crowd, at a real frame rate
     for (const k of v.keys ?? []) d.walk.keys.add(k);
@@ -168,7 +194,23 @@ function shoot(v) {
     d.step(30);
   }
   // read the canvas back in the same task as the draw, before the browser clears it
-  return { stats: d.stats(), image: document.getElementById('scene').toDataURL('image/jpeg', 0.92) };
+  const out = { stats: d.stats(), image: document.getElementById('scene').toDataURL('image/jpeg', 0.92) };
+  const gl = d.renderer.getContext();
+  const info = gl.getExtension('WEBGL_debug_renderer_info');
+  out.stats.renderer = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : 'unknown';
+  if (time) {
+    // the same frame again and again, with the clock stopped; reading a pixel back makes the browser wait for the GPU to finish
+    const px = new Uint8Array(4);
+    const draw = () => {
+      d.step(1, 0, true);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    };
+    for (let i = 0; i < 5; i++) draw();
+    const t0 = performance.now();
+    for (let i = 0; i < 40; i++) draw();
+    out.stats.ms = Math.round(((performance.now() - t0) / 40) * 100) / 100;
+  }
+  return out;
 }
 
 async function run(o) {
@@ -181,7 +223,11 @@ async function run(o) {
   const { chromium } = loadPlaywright();
   const server = await serve(o.dist);
   const base = `http://127.0.0.1:${server.address().port}/`;
-  const launch = () => chromium.launch({ args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl'] });
+  const launch = () =>
+    chromium.launch({
+      ...(o.channel ? { channel: o.channel } : {}),
+      args: o.gpu ? ['--ignore-gpu-blocklist', '--enable-gpu', '--enable-webgl'] : ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl'],
+    });
   let browser = await launch();
   mkdirSync(o.out, { recursive: true });
   const rows = [];
@@ -210,7 +256,7 @@ async function run(o) {
       const hash = `s=${SEED}&q=${tier}&l=${v.level}${v.time !== undefined ? `&t=${v.time}` : ''}${o.hash ? `&${o.hash}` : ''}`;
       await page.goto(`${base}#${hash}`);
       await page.waitForFunction(() => window.dream, null, { timeout: 120000 });
-      return await page.evaluate(shoot, v);
+      return await page.evaluate(shoot, [v, o.time]);
     } finally {
       await context.close().catch(() => {});
     }
@@ -218,15 +264,24 @@ async function run(o) {
   for (const tier of o.tiers) {
     for (const v of views) {
       const t0 = Date.now();
-      let result;
-      try {
-        result = await shot(tier, v);
-      } catch (e) {
-        // a software renderer sometimes loses its GPU process under a heavy view: start the browser again and try once more
-        console.error(`  [${tier}/${v.id}] ${String(e.message).split('\n')[0]}; trying again`);
-        await browser.close().catch(() => {});
-        browser = await launch();
-        result = await shot(tier, v);
+      const attempt = async () => {
+        try {
+          return await shot(tier, v);
+        } catch (e) {
+          // a software renderer sometimes loses its GPU process under a heavy view: start the browser again and try once more
+          console.error(`  [${tier}/${v.id}] ${String(e.message).split('\n')[0]}; trying again`);
+          await browser.close().catch(() => {});
+          browser = await launch();
+          return await shot(tier, v);
+        }
+      };
+      const result = await attempt();
+      if (o.time && o.repeat > 1) {
+        const times = [result.stats.ms];
+        for (let r = 1; r < o.repeat; r++) times.push((await attempt()).stats.ms);
+        times.sort((x, y) => x - y);
+        result.stats.ms = times[Math.floor(times.length / 2)];
+        result.stats.runs = times;
       }
       const { stats, image } = result;
       const file = `${v.id}-${tier}.jpg`;
@@ -235,13 +290,15 @@ async function run(o) {
       save(); // after every shot, so a run that is cut short keeps what it has
       console.log(
         `${v.id.padEnd(11)} ${tier.padEnd(7)} ${String(stats.calls).padStart(3)} calls  ${String(Math.round(stats.triangles / 1000)).padStart(5)}k tris  ` +
-          `${String(stats.textures).padStart(3)} textures  ${String(stats.targetMB).padStart(6)} MB targets  ${String(stats.programs).padStart(2)} programs  (${((Date.now() - t0) / 1000).toFixed(0)} s)`,
+          `${String(stats.textures).padStart(3)} textures  ${String(stats.targetMB).padStart(6)} MB targets  ${String(stats.programs).padStart(2)} programs  ` +
+          `${stats.ms !== undefined ? `${stats.ms.toFixed(2).padStart(7)} ms a frame  ` : ''}` +
+          `${stats.runs ? `(${stats.runs.map((t) => t.toFixed(1)).join(' / ')})  ` : ''}(${((Date.now() - t0) / 1000).toFixed(0)} s)`,
       );
     }
   }
   await browser.close();
   server.close();
-  console.log(`\n${rows.length} shots in ${o.out}`);
+  console.log(`\n${rows.length} shots in ${o.out}, drawn by ${rows[0]?.renderer ?? 'nothing'}`);
 }
 
 /** Side-by-side sheets from two runs, one image per view and tier, the first run on the left. */
@@ -250,13 +307,13 @@ async function compare(o) {
   const ja = JSON.parse(readFileSync(join(a, 'bench.json'), 'utf8'));
   const jb = JSON.parse(readFileSync(join(b, 'bench.json'), 'utf8'));
   const { chromium } = loadPlaywright();
-  const browser = await chromium.launch();
+  const browser = await chromium.launch(o.channel ? { channel: o.channel } : {});
   const page = await browser.newPage({ viewport: { width: 1600, height: 500 }, deviceScaleFactor: 1 });
   mkdirSync(o.out, { recursive: true });
   for (const rb of jb.rows) {
     const ra = ja.rows.find((r) => r.view === rb.view && r.quality === rb.quality);
     if (!ra) continue;
-    const label = (r) => `${r.calls} calls · ${Math.round(r.triangles / 1000)}k triangles · ${r.targetMB} MB targets`;
+    const label = (r) => `${r.calls} calls · ${Math.round(r.triangles / 1000)}k triangles · ${r.targetMB} MB targets${r.ms !== undefined ? ` · ${r.ms} ms a frame` : ''}`;
     await page.setContent(`<body style="margin:0;background:#111;color:#ddd;font:14px system-ui">
       <div style="display:flex;gap:6px;padding:6px">
         ${[

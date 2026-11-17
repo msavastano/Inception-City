@@ -20,6 +20,8 @@
 // renderer drew it, so a time from the software renderer cannot be mistaken for a real one.
 // A frame time moves from one page load to the next by more than a small change costs, so
 // --repeat 3 loads each view three times and reports the middle time and the spread.
+// --settle 3000 starts every view 3 s after its page opened, whatever the build had to load first,
+// which keeps a build that loads more (and so starts later) comparable with one that loads less.
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -126,6 +128,7 @@ function args() {
     hash: get('hash', ''),
     time: a.includes('--time'),
     repeat: Math.max(1, Number(get('repeat', '1')) || 1),
+    settle: Math.max(0, Number(get('settle', '0')) || 0),
     gpu: a.includes('--gpu'),
     channel: get('channel', ''),
     compare: compare >= 0 ? [resolve(a[compare + 1]), resolve(a[compare + 2])] : null,
@@ -158,11 +161,15 @@ function serve(dir) {
 }
 
 /** Runs in the page: set the view up, fast-forward until the city has streamed in, draw one frame. */
-async function shoot([v, time]) {
+async function shoot([v, time, settle]) {
   const d = window.dream;
   // wait for anything still loading (the hallway's model and the surface detail; builds before them have none)
   await d.hallway.ready;
   await d.detailReady;
+  // and, with --settle, until that many milliseconds after the page opened, so that a build which has more to load
+  // and one which has less start the view at the same moment (the city runs on its own clock while it waits)
+  const wait = (settle ?? 0) - performance.now();
+  if (wait > 0) await new Promise((done) => setTimeout(done, wait));
   d.audio.start = () => {};
   d.start(v.at ? 'walk' : 'architect');
   d.pendingPreset = null;
@@ -309,7 +316,7 @@ async function run(o) {
       const hash = `s=${SEED}&q=${tier}&l=${v.level}${v.time !== undefined ? `&t=${v.time}` : ''}${o.hash ? `&${o.hash}` : ''}`;
       await page.goto(`${base}#${hash}`);
       await page.waitForFunction(() => window.dream, null, { timeout: 120000 });
-      return await page.evaluate(shoot, [v, o.time]);
+      return await page.evaluate(shoot, [v, o.time, o.settle]);
     } finally {
       await context.close().catch(() => {});
     }

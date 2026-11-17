@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { COLLAPSE_RADIUS, MAX_FOLDS } from './core/config';
 import { Fold, FoldStack, foldPoint } from './core/fold';
 import { totemGeometry } from './city/geometry';
-import { U } from './city/materials';
+import { U, setWallRelief } from './city/materials';
 import { CityStreamer } from './city/streamer';
 import { DreamAudio, Heard } from './fx/audio';
 import { CROWD_VOICES, CrowdVoice, crowdVoices, Footfall, footing, Scene, toEar } from './fx/soundscape';
@@ -1042,7 +1042,9 @@ export class App implements DreamContext {
     this.post.setSize(window.innerWidth, window.innerHeight, pr);
     this.post.bloom.enabled = q.bloom;
     this.env.mirrorScale = q.mirror;
-    U.uRelief.value.set(q.relief > 0 ? Math.min(LOOK.relief, 2) : 0, Math.min(LOOK.relief, 1.5), q.relief * 0.7, q.relief);
+    // Low (and #relief=0) compile the relief out of the building shader altogether
+    setWallRelief(q.relief > 0 && LOOK.relief > 0);
+    U.uRelief.value.set(Math.min(LOOK.relief, 2), Math.min(LOOK.relief, 1.5), q.relief * 0.7, q.relief);
     this.streamer.limit = q.chunks;
     this.audio.setSpatial(name !== 'low');
     const sun = this.env.sun;

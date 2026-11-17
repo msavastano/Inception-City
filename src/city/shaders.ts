@@ -178,7 +178,7 @@ uniform float uSnow;
 uniform float uTime;
 uniform vec4 uBlast;   // the café explosion: centre x, z (fabric), wave front radius, strength (0 while the dream holds)
 uniform vec4 uLook;    // ambient occlusion strength, night glow strength (src/world/look.ts)
-uniform vec4 uRelief;  // the walls' relief: depth of the window reveals (0 turns all of it off), strength of the bumps, where the reveals start and finish fading (metres from the eye)
+uniform vec4 uRelief;  // the walls' relief (only read when RELIEF is defined): depth of the window reveals, strength of the bumps, where the reveals start and finish fading (metres from the eye)
 float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float box2(vec2 p, vec2 lo, vec2 hi) { return step(lo.x, p.x) * step(p.x, hi.x) * step(lo.y, p.y) * step(p.y, hi.y); }
 
@@ -217,6 +217,10 @@ void setRoom(float along, float width, float y, float height, float depth, vec2 
   gRoomKind = kind;
 }
 
+// RELIEF is defined on every quality tier but Low (src/city/materials.ts, setWallRelief). Without it the walls are
+// flat, as they were before the relief: the helpers below become stubs that return nothing, so all of the relief's
+// arithmetic in facade() folds away when the shader is compiled and Low pays nothing for it.
+#ifdef RELIEF
 // Detail finer than a pixel would sparkle as you walk. 1 while a line w metres wide can still be drawn, 0 once it cannot;
 // and the same for a groove that wide, which has to be a few pixels across before its two sides can be told apart.
 float fine(float w) { return 1.0 - smoothstep(0.5 * w, 1.5 * w, gPx); }
@@ -239,6 +243,13 @@ vec2 surround(vec2 p, vec2 s, vec2 e) {
   vec2 side = sign(p - 0.5 * s);
   return d.x > d.y ? vec2(-side.x, 0.0) : vec2(0.0, -side.y);
 }
+#else
+float fine(float w) { return 0.0; }
+float carved(float w) { return 0.0; }
+float joint(float x, float w) { return 0.0; }
+void ledge(float below, float reach) {}
+vec2 surround(vec2 p, vec2 s, vec2 e) { return vec2(0.0); }
+#endif
 
 // Paints one facade cell. Returns window mask, lit amount and glassiness.
 void facade(inout vec3 col, out float win, out float lit, out float glassy, out vec3 litCol) {
@@ -251,8 +262,12 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
   gOpen = 0.0; gDepth = 0.0; gWall = col; gFrame = vec4(0.0); gPanes = vec2(1.0); gSlope = vec2(0.0); gCast = 1.0; gRail = 0.0;
   setRoom(0.0, 1.0, 0.0, 1.0, 1.0, vec2(0.0), vec2(0.0), 0.0, 0.0);
   litCol = mix(vec3(1.0, 0.72, 0.42), vec3(1.0, 0.9, 0.75), hash12(vec2(seed * 91.0, 3.0)));
-  // the relief is off on Low, and everything painted here has gone once the pattern itself has
-  float relief = step(0.0001, uRelief.x) * (1.0 - smoothstep(0.25, 0.7, gPx));
+  // everything the relief paints here has gone once the pattern itself has
+#ifdef RELIEF
+  float relief = 1.0 - smoothstep(0.25, 0.7, gPx);
+#else
+  const float relief = 0.0;
+#endif
 
   if (style > 8.5) {
     if (style < 9.5) {
@@ -793,7 +808,9 @@ gPx = max(fwidth(rU), fwidth(vLocal.y));
 gNear = 0.0; gSunFace = 0.0; gSunLean = vec2(0.0);
 vec3 rT = vec3(0.0);
 vec3 rB = vec3(0.0);
-bool reliefOn = uRelief.x > 0.0 && rAn.y < 0.5 && vInfo.x < 9.5 && gPx < 0.7;
+bool reliefOn = false;
+#ifdef RELIEF
+reliefOn = rAn.y < 0.5 && vInfo.x < 9.5 && gPx < 0.7;
 if (reliefOn) {
   gNear = 1.0 - smoothstep(uRelief.z, uRelief.w, length(vViewPosition));
   vec3 rN = normalize(vNormal);
@@ -819,6 +836,7 @@ if (reliefOn) {
   gSunLean = clamp(sunW.xy / max(sunW.z, 0.1), -6.0, 6.0);
 #endif
 }
+#endif
 float winMask; float winLit; float glassy; vec3 litCol;
 facade(diffuseColor.rgb, winMask, winLit, glassy, litCol);
 vec2 wallAO = wallOcclusion();
@@ -838,7 +856,9 @@ float revealAO = 1.0;
 float frame = 0.0;
 vec3 revealGlow = vec3(0.0);
 vec3 rd = vec3(rAn.x > 0.5 ? vViewF.z : vViewF.x, vViewF.y, -dot(vViewF, vObjN));
-float revealDepth = gDepth * uRelief.x * gNear;
+float revealDepth = 0.0;
+#ifdef RELIEF
+revealDepth = gDepth * uRelief.x * gNear;
 if (gOpen > 0.5 && hole < 0.5 && revealDepth > 0.001) {
   float soft = 0.012 + gPx;
   vec2 pm = gPane * gPaneM;
@@ -874,6 +894,7 @@ if (gOpen > 0.5 && hole < 0.5 && revealDepth > 0.001) {
     frame = frameMask(q) * gNear;
   }
 }
+#endif
 float pane = winMask;
 float rimAO = 1.0;
 if (pane > 0.01) rimAO = mix(1.0, openingRim(), (1.0 - gLod) * uLook.x);
@@ -896,16 +917,20 @@ if ((pane > 0.01 || hole > 0.5) && gLod < 0.98 && frame < 0.99) {
     // backlit curtains glow; seen from outside by day they are just cloth
     nightCol = mix(nightCol, dr.rgb * (light * gRoomOn * (dr.a < 0.5 ? 0.5 : 0.3) + 0.01), dr.a);
     dayCol = mix(dayCol, dr.rgb * 0.08, dr.a);
+#ifdef RELIEF
     // and close to, that cloth hangs in the daylight that comes through the glass, so the reveal's shadow falls across it
     diffuseColor.rgb = mix(diffuseColor.rgb, dr.rgb * 0.45, dr.a * 0.5 * gNear * (1.0 - uNight) * step(0.001, revealDepth));
+#endif
   }
   vec3 near = (nightCol * mix(1.0, rimAO, 0.5) * uNight + dayCol * rimAO * (1.0 - uNight)) * max(pane, hole) * soot;
   winGlow = mix(near, winGlow, gLod);
 }
+#ifdef RELIEF
 // the frame stands in front of the room
 diffuseColor.rgb = mix(diffuseColor.rgb, gFrame.rgb * mix(1.0, rimAO, 0.6), frame);
 winMask *= 1.0 - frame;
 winGlow = winGlow * (1.0 - frame) + revealGlow;
+#endif
 if (hole > 0.5) {
   diffuseColor.rgb = mix(vec3(0.03, 0.027, 0.025), vColor.rgb * 0.3, rim);
   winMask = 0.0;
@@ -925,7 +950,9 @@ if (hole > 0.5) {
 // The wall's relief turns the surface the light falls on: bumps lean it, a reveal's side faces across the opening.
 export const BUILDING_FRAG_NORMAL = /* glsl */ `
 #include <normal_fragment_maps>
+#ifdef RELIEF
 if (reliefOn) normal = normalize(rT * reliefN.x + rB * reliefN.y + normal * reliefN.z);
+#endif
 `;
 
 export const BUILDING_FRAG_ROUGH = /* glsl */ `
@@ -946,12 +973,15 @@ if (uNight > 0.02 && uLook.y > 0.0) totalEmissiveRadiance += diffuseColor.rgb * 
 export const BUILDING_FRAG_AO = /* glsl */ `
 #include <aomap_fragment>
 {
-  float skyAO = mix(1.0, wallAO.x * rimAO, uLook.x) * revealAO;
-  reflectedLight.indirectDiffuse *= skyAO;
-  reflectedLight.indirectSpecular *= mix(1.0, skyAO, 0.7);
+  float skyAO = mix(1.0, wallAO.x * rimAO, uLook.x);
+#ifdef RELIEF
+  skyAO *= revealAO;
   // the sun is the only light that arrives from one direction, so the relief's shadows are cut out of it here
   reflectedLight.directDiffuse *= sunShade;
   reflectedLight.directSpecular *= sunShade;
+#endif
+  reflectedLight.indirectDiffuse *= skyAO;
+  reflectedLight.indirectSpecular *= mix(1.0, skyAO, 0.7);
 }
 `;
 

@@ -146,6 +146,28 @@ const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [s
   },
 };
 
+/** Every building material made, so the walls' relief can be compiled in or out of all of them at once. */
+const buildingMaterials: THREE.MeshStandardMaterial[] = [];
+let wallRelief = true;
+
+/**
+ * Compile the walls' relief (window reveals, ledge shadows, carved joints) into the building shader, or leave it
+ * out so the walls are flat and cost what they did before it. Off on Low. Changing it recompiles the building
+ * shader once, which happens on the same step down to Low that turns the sun's shadows off and recompiles it anyway.
+ */
+export function setWallRelief(on: boolean): void {
+  if (on === wallRelief) return;
+  wallRelief = on;
+  for (const mat of buildingMaterials) applyWallRelief(mat);
+}
+
+function applyWallRelief(mat: THREE.MeshStandardMaterial): void {
+  const defines = (mat.defines ??= {});
+  if (wallRelief) defines.RELIEF = '';
+  else delete defines.RELIEF;
+  mat.needsUpdate = true;
+}
+
 /** The person shaders read the crowd's bone texture: bake it once, the first time anyone needs it. */
 function needBones(kind: Kind): void {
   if (kind !== 'person' || U.tBones.value) return;
@@ -182,6 +204,10 @@ export function foldedMaterial(kind: Kind, params: THREE.MeshStandardMaterialPar
   };
   mat.customProgramCacheKey = () => `inception-${kind}`;
   blendIntoSky(mat);
+  if (kind === 'building') {
+    buildingMaterials.push(mat);
+    applyWallRelief(mat);
+  }
   return mat;
 }
 

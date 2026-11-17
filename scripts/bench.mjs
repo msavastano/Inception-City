@@ -18,6 +18,8 @@
 // installed browser (msedge, chrome) instead of Playwright's own, and --time draws each view
 // forty more times and reports the average frame in milliseconds. Every row records which
 // renderer drew it, so a time from the software renderer cannot be mistaken for a real one.
+// A frame time moves from one page load to the next by more than a small change costs, so
+// --repeat 3 loads each view three times and reports the middle time and the spread.
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -106,6 +108,7 @@ function args() {
     phone: a.includes('--phone'),
     hash: get('hash', ''),
     time: a.includes('--time'),
+    repeat: Math.max(1, Number(get('repeat', '1')) || 1),
     gpu: a.includes('--gpu'),
     channel: get('channel', ''),
     compare: compare >= 0 ? [resolve(a[compare + 1]), resolve(a[compare + 2])] : null,
@@ -261,15 +264,24 @@ async function run(o) {
   for (const tier of o.tiers) {
     for (const v of views) {
       const t0 = Date.now();
-      let result;
-      try {
-        result = await shot(tier, v);
-      } catch (e) {
-        // a software renderer sometimes loses its GPU process under a heavy view: start the browser again and try once more
-        console.error(`  [${tier}/${v.id}] ${String(e.message).split('\n')[0]}; trying again`);
-        await browser.close().catch(() => {});
-        browser = await launch();
-        result = await shot(tier, v);
+      const attempt = async () => {
+        try {
+          return await shot(tier, v);
+        } catch (e) {
+          // a software renderer sometimes loses its GPU process under a heavy view: start the browser again and try once more
+          console.error(`  [${tier}/${v.id}] ${String(e.message).split('\n')[0]}; trying again`);
+          await browser.close().catch(() => {});
+          browser = await launch();
+          return await shot(tier, v);
+        }
+      };
+      const result = await attempt();
+      if (o.time && o.repeat > 1) {
+        const times = [result.stats.ms];
+        for (let r = 1; r < o.repeat; r++) times.push((await attempt()).stats.ms);
+        times.sort((x, y) => x - y);
+        result.stats.ms = times[Math.floor(times.length / 2)];
+        result.stats.runs = times;
       }
       const { stats, image } = result;
       const file = `${v.id}-${tier}.jpg`;
@@ -279,7 +291,8 @@ async function run(o) {
       console.log(
         `${v.id.padEnd(11)} ${tier.padEnd(7)} ${String(stats.calls).padStart(3)} calls  ${String(Math.round(stats.triangles / 1000)).padStart(5)}k tris  ` +
           `${String(stats.textures).padStart(3)} textures  ${String(stats.targetMB).padStart(6)} MB targets  ${String(stats.programs).padStart(2)} programs  ` +
-          `${stats.ms !== undefined ? `${stats.ms.toFixed(2).padStart(7)} ms a frame  ` : ''}(${((Date.now() - t0) / 1000).toFixed(0)} s)`,
+          `${stats.ms !== undefined ? `${stats.ms.toFixed(2).padStart(7)} ms a frame  ` : ''}` +
+          `${stats.runs ? `(${stats.runs.map((t) => t.toFixed(1)).join(' / ')})  ` : ''}(${((Date.now() - t0) / 1000).toFixed(0)} s)`,
       );
     }
   }

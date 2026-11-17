@@ -1,4 +1,4 @@
-import { BLOCK, BOULEVARD_HALF, SIDEWALK, streetHalfWidth } from '../core/config';
+import { BLOCK, BOULEVARD_HALF, GUTTER, SIDEWALK, streetHalfWidth } from '../core/config';
 import { BlockKind, blockKind } from './generator';
 
 /**
@@ -27,7 +27,12 @@ export function groundAt(x: number, z: number, seed: number): Ground {
   const sx = street(x);
   const sz = street(z);
   if (sx.d <= sx.hw || sz.d <= sz.hw) {
-    return sx.d <= sx.hw - SIDEWALK || sz.d <= sz.hw - SIDEWALK ? 'asphalt' : 'paving';
+    const roadX = sx.d <= sx.hw - SIDEWALK;
+    const roadZ = sz.d <= sz.hw - SIDEWALK;
+    if (!roadX && !roadZ) return 'paving';
+    // the last half metre before a kerb is a gutter of granite setts (but not where the street crosses another)
+    const gutter = (roadX && sz.d > sz.hw && sx.d > sx.hw - SIDEWALK - GUTTER) || (roadZ && sx.d > sx.hw && sz.d > sz.hw - SIDEWALK - GUTTER);
+    return gutter ? 'paving' : 'asphalt';
   }
   const bx = Math.floor(x / BLOCK);
   const bz = Math.floor(z / BLOCK);

@@ -152,7 +152,7 @@ The rules live in `src/game/heist.ts` with no rendering in them, so `tests/heist
 
 ## 5. How it is built
 
-The stack is TypeScript, Three.js (WebGL 2) and Vite, with Vitest for the maths. There are no textures and no models to download. Every brick, window, awning, cobble and cloud is generated in code from the seed, and so is the drone under everything. The two exceptions are the people's animation clips (5.9) and under a megabyte of recorded sound (5.10), both CC0 and listed in `ASSETS.md`.
+The stack is TypeScript, Three.js (WebGL 2) and Vite, with Vitest for the maths. There are no textures and no models to download. Every brick, window, awning, cobble and cloud is generated in code from the seed, and so is the drone under everything. The exceptions are the people's animation clips (5.9), under a megabyte of recorded sound (5.10) and the shapes of seven scanned surfaces (5.13), all CC0 and listed in `ASSETS.md`.
 
 ### 5.1 The key idea: fabric space and world space
 
@@ -359,6 +359,18 @@ Before and after, from the bench (Medium, the same seed and view):
 
 ![The same at midnight, before and after](images/hallway-model/hall-night-medium.jpg)
 
+### 5.13 Surface detail
+
+Painted surfaces hold up from the air and give themselves away at the kerb: a pavement is one smooth colour, and a limestone wall is flat between its joints. Real surfaces have grain, and the grain catches the light. That is the one thing a painter written from rules does badly and a photograph does well, so this is the one place the city uses scanned textures, and it uses only their shape.
+
+- **Seven scanned surfaces.** Asphalt, the exposed aggregate of a concrete pavement, granite setts, setts laid in fans, a gravel path, worn smooth stone and board-marked concrete, all CC0 from Poly Haven (`ASSETS.md`). `scripts/pack-detail.mjs` keeps three things of each at 512 × 512: how the surface leans (its normal map), how its roughness varies, and its cavities (its ambient occlusion). It keeps none of its colour. The shaders go on painting the colours they always did; the scan only says where the surface dips, where it is smoother and where it is rough. Each surface ships as one grey WebP of four tiles, about 1.2 MB for all seven.
+- **One texture.** The seven are unpacked into one texture array, fetched just after the first frame. Any surface can read any layer through the same sampler, so the city keeps one material per kind of object and gains no draw calls. Until the textures arrive, or if they cannot be read, a flat stand-in changes nothing.
+- **Which surface is which.** The painters already know what they are painting, so each picks its layer as it goes: asphalt on the roads (less of it under the painted lines), aggregate on the pavements, worn stone on the kerbs, the flagstones and the Haussmann fronts, setts in the courtyards, setts in fans round the monument and in the middle of the squares, gravel on the park paths, board-marked concrete on the concrete towers, and the aggregate again, small, on the faces of the old town's bricks. Along every kerb there is now a gutter of granite setts half a metre wide, and the footsteps there are stone (5.10). Lawns, the pond and Limbo's sea get no detail, snow covers it, and standing water drowns it.
+- **No tiling.** A 2 m tile repeated down a street shows its pattern from ten metres away. The grainy layers (asphalt, aggregate, gravel, stone) are read twice, the second time at about 0.7 of the scale and turned by a third of a radian, and the two are mixed by a slow noise, so the repeats never line up. The patterned layers (setts, fans, boards) are read once, because their pattern is meant to repeat, and the setts in a gutter turn to run along the street. A wall reads its detail in its own coordinates, along it and up it, shifted by a random number of tiles for each building, so that neighbours do not match and the detail stays put on the wall when a fold bends it.
+- **How it reaches the light.** On the ground the lean is applied in the ground's own axes, found from screen derivatives as on the walls (5.11), so it holds on a curl; on a wall it is added to the relief's lean, and windows, rails and café-explosion holes get none. The roughness map scales the surface's own roughness, so the smoother and the rougher parts of a surface catch a low sun differently. The cavities darken the colour in the hollows. Every pixel reads its detail once, before the painters branch, with gradients worked out first, so the mipmaps are right everywhere and a compiler is free to skip the branches a pixel does not need (5.12).
+- **Only close to.** The detail fades out between about 22 and 36 m on Medium (28 to 46 m on High, 34 to 56 m on Ultra), beyond which it would only shimmer. Low leaves it out of the shaders altogether (it is compiled in only when a `DETAIL` define is set) and never downloads the files. `#detail=0` does the same on any tier, which makes it the fair comparison when timing, and `#detail=2` deepens it.
+- **What it costs.** About 1.2 MB of download after the first frame, about 10 MB of video memory for the array and its mipmaps, and no draw calls. Per pixel close to, it is two to four texture reads.
+
 ## 6. Scaling
 
 The goal is a city that is effectively infinite, foldable in real time, and still smooth on a phone. Each of the decisions below exists to keep one cost constant as the city grows.
@@ -385,9 +397,9 @@ The result is about eleven draw calls for the whole city, whether it has two tho
 - **The crowd** is a single instanced mesh of skinned people (5.9). Its size follows the quality tier, from 180 to 900 people, and only those within 110 m are drawn into the shadow map.
 - **The café explosion** throws between 1,600 (Low) and 7,000 (Ultra) shards, all in one instanced mesh that is hidden the rest of the time. The building shader's blast branch costs one uniform test per pixel while the dream holds.
 
-### 6.5 No textures
+### 6.5 Painted, not textured
 
-All surface detail comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, the rooms behind the windows, snow cover, puddles and raindrop ripples, crosswalks, park paths, lamp pools, contact shadows (5.8), window reveals and the shadows under ledges (5.11), glowing crease lines and the glowing lattice on the underside of a fold. The build ships no image assets at all. The whole app, including the 3D engine and the people's packed animation (5.9), is about 940 kB of JavaScript (about 290 kB gzipped), beside about 830 kB of recorded sound (5.10) that is fetched as it is needed.
+All the colour comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, the rooms behind the windows, snow cover, puddles and raindrop ripples, crosswalks, park paths, lamp pools, contact shadows (5.8), window reveals and the shadows under ledges (5.11), glowing crease lines and the glowing lattice on the underside of a fold. The only images are the hallway's baked light (5.12) and the shape of seven scanned surfaces seen close to (5.13), and neither paints a surface's colour. The whole app, including the 3D engine and the people's packed animation (5.9), is about 1.07 MB of JavaScript (about 330 kB gzipped), beside about 830 kB of recorded sound (5.10) and 1.2 MB of surface detail, both fetched as they are needed.
 
 ### 6.6 Bounded fold cost
 
@@ -395,14 +407,14 @@ Fold state is two arrays of eight vec4 uniforms. Every vertex pays for at most e
 
 ### 6.7 Adaptive quality
 
-Four tiers (low, medium, high, ultra) set pixel ratio, shadow map size and extent, bloom, the wet-street mirror's resolution, how far the window reveals reach, view distance, prop distance, chunk cap and crowd size. The app starts from a guess based on the device and then watches the frame rate, stepping down a tier when it drops below about 38 fps and back up (as far as High) when it holds above 57 fps. Ultra is opt-in from the panel, and `#q=` in the URL pins any tier.
+Four tiers (low, medium, high, ultra) set pixel ratio, shadow map size and extent, bloom, the wet-street mirror's resolution, how far the window reveals and the surface detail reach, view distance, prop distance, chunk cap and crowd size. The app starts from a guess based on the device and then watches the frame rate, stepping down a tier when it drops below about 38 fps and back up (as far as High) when it holds above 57 fps. Ultra is opt-in from the panel, and `#q=` in the URL pins any tier.
 
-| Tier | Pixel ratio | Shadows | Bloom | Wet-street mirror | Window reveals | View distance | Chunk cap | Crowd |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Ultra | 2 | 4096 | yes | ½ resolution | to 64 m | 1300 m | 150 | 900 |
-| High | 1.5 | 2048 | yes | ½ resolution | to 48 m | 1050 m | 120 | 600 |
-| Medium | 1 | 2048 | yes | ⅓ resolution | to 38 m | 820 m | 90 | 400 |
-| Low | 0.75 | off | no | lamp reflections only | flat walls | 620 m | 60 | 180 |
+| Tier | Pixel ratio | Shadows | Bloom | Wet-street mirror | Window reveals | Surface detail | View distance | Chunk cap | Crowd |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Ultra | 2 | 4096 | yes | ½ resolution | to 64 m | to 56 m | 1300 m | 150 | 900 |
+| High | 1.5 | 2048 | yes | ½ resolution | to 48 m | to 46 m | 1050 m | 120 | 600 |
+| Medium | 1 | 2048 | yes | ⅓ resolution | to 38 m | to 36 m | 820 m | 90 | 400 |
+| Low | 0.75 | off | no | lamp reflections only | flat walls | none | 620 m | 60 | 180 |
 
 ### 6.8 State that fits in a link
 
@@ -450,8 +462,11 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 ### Milestone 1.9: walls with depth (done)
 - Windows set back in their walls with lit and shaded reveals, frames and glazing bars; cornices, string courses, balconies, awnings and sills that shade the wall under them; carved joints in stone, brick and concrete. All in the facade painter, with no new geometry (5.11)
 
-### Milestone 1.10: the hallway, built in Blender (this release)
+### Milestone 1.10: the hallway, built in Blender (done)
 - The rotating hallway as a modelled hotel corridor (wainscot, mouldings, panelled doors with their numbers, sconces, a coffered ceiling, carpet and wallpaper) with its lamps' light baked in Cycles, in a 110 kB file, built from a script with nothing downloaded (5.12)
+
+### Milestone 1.11: surface detail (this release)
+- The grain of asphalt, paving, setts, gravel, worn stone and board-marked concrete close to, from seven CC0 scans of which only the shape is kept, in one texture array of 1.2 MB, with granite gutters along the kerbs (5.13)
 
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
@@ -479,11 +494,13 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/city/generator.ts` | Deterministic chunk generation: blocks, lots, towers, roofs, props |
 | `src/city/shaders.ts` | GLSL: fold transform, facade painter (rooms, window reveals, relief), ground painter, props, people, picking |
 | `src/city/materials.ts` | Shared uniforms and patched Three.js materials, depth and pick variants |
+| `src/city/detail.ts`, `src/city/detail/` | The surface detail: the packed scans and the loader that unpacks them into one texture array |
+| `scripts/pack-detail.mjs` | Packs the scanned surfaces from Poly Haven into `src/city/detail/` |
 | `src/city/pool.ts` | The slab allocator for instanced attributes |
 | `src/city/streamer.ts` | World-space streaming, LOD, collision and raise-brush edits |
 | `src/world/` | Sky, sun and weather, dream levels, the projections crowd |
 | `src/world/atmosphere.ts` | The sky's colour function and the haze that replaces fog in every folded material |
-| `src/world/look.ts` | The dials for the look (tone curve, ambient occlusion, haze, glow, wall relief, the modelled hallway) and their link parameters |
+| `src/world/look.ts` | The dials for the look (tone curve, ambient occlusion, haze, glow, wall relief, the modelled hallway, surface detail) and their link parameters |
 | `src/world/hallway.ts` | The rotating hallway: the painted box, the rider's physics, and which corridor is drawn |
 | `src/world/hallwayModel.ts`, `src/world/hallway/` | The corridor modelled and baked in Blender: loading, mirroring the quarter, and its painter |
 | `art/hallway/build_hallway.py`, `scripts/pack-hallway.mjs` | Builds, lights and bakes the corridor in Blender, then compresses it into `src/world/hallway/` |

@@ -15,6 +15,8 @@ export const STREET_HALF = 7;
 export const BOULEVARD_HALF = 12;
 /** Sidewalk width, measured inward from the building line. */
 export const SIDEWALK = 3;
+/** Width (m) of the gutter of granite setts along each kerb, on the roadway's side. */
+export const GUTTER = 0.5;
 
 /** Maximum simultaneous folds (a uniform-array budget shared by CPU and GPU). */
 export const MAX_FOLDS = 8;

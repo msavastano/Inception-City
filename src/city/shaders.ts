@@ -5,6 +5,7 @@ import {
   CHUNK,
   CHUNK_BLOCKS,
   COLLAPSE_RADIUS,
+  GUTTER,
   LAMP_OFFSET,
   LAMP_SPACING,
   LANTERN_HEIGHT,
@@ -14,8 +15,87 @@ import {
   STREET_HALF,
 } from '../core/config';
 import { PART, PIECE } from '../people/body';
+import { DETAIL } from './detail/manifest';
 
 const f = (n: number) => n.toFixed(4);
+
+/**
+ * The close-up surface detail (src/city/detail.ts), shared by the ground and the buildings. The painters
+ * choose a layer and the surface's coordinates with setDetail(); surfaceDetail() then reads the scanned
+ * relief, roughness and cavities there. Without DETAIL (Low quality, or #detail=0) nothing is read.
+ */
+const DETAIL_GLSL = /* glsl */ `
+${DETAIL.layers.map((l, i) => `const float D_${l.name.toUpperCase()} = ${i}.0;\nconst float M_${l.name.toUpperCase()} = ${f(l.metres)};`).join('\n')}
+// What the painter chose for this pixel: the layer, where the pixel is on it (metres), the size of one tile
+// (metres), how strongly it shows, whether the layer is plain grain (1: read twice, at two scales and turns,
+// so that no repeat lines up) or a pattern (0: setts and boards keep their rows), and whether its rows run
+// along the surface's second axis (1) rather than its first.
+float gDLayer = 0.0;
+vec2 gDP = vec2(0.0);
+float gDSize = 2.0;
+float gDGain = 0.0;
+float gDGrain = 0.0;
+float gDTurn = 0.0;
+void setDetail(float layer, vec2 p, float size, float gain, float grain, float turn) {
+  gDLayer = layer; gDP = turn > 0.5 ? p.yx : p; gDSize = size; gDGain = gain; gDGrain = grain; gDTurn = turn;
+}
+#ifdef DETAIL
+uniform highp sampler2DArray tDetail;
+uniform vec4 uDetail;  // strength of the relief, strength of the cavities, where the detail starts and finishes fading (metres)
+float dHash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float dNoise(vec2 p) {
+  vec2 i = floor(p); vec2 u = fract(p); u = u * u * (3.0 - 2.0 * u);
+  return mix(mix(dHash(i), dHash(i + vec2(1, 0)), u.x), mix(dHash(i + vec2(0, 1)), dHash(i + vec2(1, 1)), u.x), u.y);
+}
+// One read: the lean along u and v, the change in roughness, the cavity (1 = none). Explicit gradients, because the
+// painters choose layers per pixel and texture() inside their branches would have no derivatives to go on.
+vec4 detailTap(vec2 uv, vec2 gx, vec2 gy) {
+  vec4 t = textureGrad(tDetail, vec3(uv, gDLayer), gx, gy);
+  return vec4(t.xy * 2.0 - 1.0, t.z - 0.5, t.w * ${f(1 / DETAIL.aoMean)});
+}
+// The detail at this pixel, faded with distance and by how strongly the painter asked for it. Call it where every
+// pixel runs it (not inside a branch): it takes the derivatives of the surface's coordinates.
+vec4 surfaceDetail() {
+  vec2 uv = gDP / gDSize;
+  vec2 gx = dFdx(uv);
+  vec2 gy = dFdy(uv);
+  float k = gDGain * (1.0 - smoothstep(uDetail.z, uDetail.w, length(vViewPosition)));
+  vec4 d = vec4(0.0, 0.0, 0.0, 1.0);
+  if (k > 0.0) {
+    d = detailTap(uv, gx, gy);
+    if (gDGrain > 0.5) {
+      // a second read, 1.4 times larger and turned by a third of a radian, mixed in by a slow noise: no tile repeats exactly
+      const mat2 R = mat2(0.9450, 0.3271, -0.3271, 0.9450);
+      vec4 e = detailTap(R * uv * 0.71 + vec2(0.37, 0.61), R * gx * 0.71, R * gy * 0.71);
+      e.xy = e.xy * R;
+      d = mix(d, e, smoothstep(0.25, 0.75, dNoise(uv * 0.43)));
+    }
+    if (gDTurn > 0.5) d.xy = d.yx;
+    d.xy *= k * uDetail.x;
+    d.z *= k;
+    d.w = mix(1.0, d.w, k * uDetail.y);
+  }
+  return d;
+}
+// The surface's own axes in view space (along the first and second coordinate of st), from screen derivatives.
+void surfaceAxes(vec2 st, vec3 n, out vec3 T, out vec3 B) {
+  vec3 q0 = -dFdx(vViewPosition);
+  vec3 q1 = -dFdy(vViewPosition);
+  vec2 st0 = dFdx(st);
+  vec2 st1 = dFdy(st);
+  vec3 q1p = cross(q1, n);
+  vec3 q0p = cross(n, q0);
+  T = q1p * st0.x + q0p * st1.x;
+  B = q1p * st0.y + q0p * st1.y;
+  float det = max(dot(T, T), dot(B, B));
+  float inv = det > 0.0 ? inversesqrt(det) : 0.0;
+  T *= inv;
+  B *= inv;
+}
+#else
+vec4 surfaceDetail() { return vec4(0.0, 0.0, 0.0, 1.0); }
+#endif
+`;
 
 /** Shared by every folded object. GPU twin of foldPoint() in src/core/fold.ts. */
 export const FOLD_GLSL = /* glsl */ `
@@ -179,6 +259,7 @@ uniform float uTime;
 uniform vec4 uBlast;   // the café explosion: centre x, z (fabric), wave front radius, strength (0 while the dream holds)
 uniform vec4 uLook;    // ambient occlusion strength, night glow strength (src/world/look.ts)
 uniform vec4 uRelief;  // the walls' relief (only read when RELIEF is defined): depth of the window reveals, strength of the bumps, where the reveals start and finish fading (metres from the eye)
+${DETAIL_GLSL}
 float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float box2(vec2 p, vec2 lo, vec2 hi) { return step(lo.x, p.x) * step(p.x, hi.x) * step(lo.y, p.y) * step(p.y, hi.y); }
 
@@ -309,6 +390,9 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
   float u = (an.x > 0.5 ? vLocal.z : vLocal.x) + 400.0;
   float v = vLocal.y;
   float H = vInfo.w;
+  // the scanned grain of the wall, in the building's own coordinates (so it stays put when the city folds),
+  // shifted per building so that neighbours do not match
+  vec2 grainAt = vec2(u, v) + floor(vec2(hash12(vec2(seed * 13.0, 1.7)), hash12(vec2(seed * 29.0, 4.1))) * 8.0) * 1.37;
   // a few rooms per building are offices, whatever the facade
   float office = step(0.7, hash12(vec2(seed * 41.0, 5.0)));
   // the opening this pixel belongs to: where the pixel is in it, and its size (metres)
@@ -326,6 +410,7 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
     col *= 0.92 + 0.08 * hash12(vec2(floor(su), row));
     float bed = (fract(v * 2.5 + 0.5) - 0.5) / 2.5;   // metres from the nearest joint between courses
     float perp = (fract(su + 0.5) - 0.5) / 1.6;       // and from the nearest joint between blocks
+    setDetail(D_STONE, grainAt, M_STONE, 1.0, 1.0, 0.0);
     if (v < shopH) {
       float bay = fract(u / 4.2);
       op = vec2((bay - 0.12) * 4.2, v - 0.25);
@@ -336,6 +421,7 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
       if (pick > 0.66) awning = vec3(0.1, 0.3, 0.2); else if (pick > 0.33) awning = vec3(0.12, 0.16, 0.32);
       float under = step(0.08, bay) * step(bay, 0.92);
       float aw = step(3.35, v) * step(v, 4.0) * under;
+      gDGain *= 1.0 - aw;
       // the ground floor is cut into deep bands
       float band = relief * (1.0 - aw);
       gSlope.y = 0.8 * joint(bed, 0.05) * carved(0.05) * band;
@@ -416,6 +502,8 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
   } else if (style < 2.5) {
     // Modernist concrete: ribbon windows between cast panels.
     float fh = 3.6;
+    // cast against boards: one board-marked tile per 2 m panel, its rows level with the panel's edges
+    setDetail(D_BOARDS, vec2(grainAt.x, v), M_BOARDS, 1.0, 0.0, 0.0);
     float level = floor(v / fh);
     float fv = fract(v / fh) * fh;
     op = vec2((fract(u / 1.8) - 0.08) * 1.8, fv - 1.0);
@@ -438,6 +526,8 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
   } else {
     // Old-town brick.
     float fh = 3.1;
+    // the faces of the bricks have the grain of fired clay, finer than the stone's
+    setDetail(D_AGGREGATE, grainAt, 0.8, 0.6, 1.0, 0.0);
     float level = floor(v / fh);
     float fv = fract(v / fh) * fh;
     float cy = fract(v * 4.0);
@@ -455,6 +545,7 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
     vec2 edge = vec2(0.108, 0.1);
     float trim = box2(op, -edge, os + edge) - w;
     col = mix(col, vec3(0.88, 0.86, 0.8), trim);
+    if (trim > 0.5) setDetail(D_STONE, grainAt, M_STONE, 1.0, 1.0, 0.0);
     // the stone trim stands proud of the brick, and its sill shades the courses under it
     gSlope = mix(gSlope, vec2(0.0), trim) + 0.9 * surround(op, os, edge) * carved(0.06) * relief;
     if (op.x > -edge.x && op.x < os.x + edge.x) ledge(-edge.y - op.y, 0.07);
@@ -809,10 +900,12 @@ gNear = 0.0; gSunFace = 0.0; gSunLean = vec2(0.0);
 vec3 rT = vec3(0.0);
 vec3 rB = vec3(0.0);
 bool reliefOn = false;
-#ifdef RELIEF
+#if defined(RELIEF) || defined(DETAIL)
 reliefOn = rAn.y < 0.5 && vInfo.x < 9.5 && gPx < 0.7;
 if (reliefOn) {
+#ifdef RELIEF
   gNear = 1.0 - smoothstep(uRelief.z, uRelief.w, length(vViewPosition));
+#endif
   vec3 rN = normalize(vNormal);
   vec3 q0 = -dFdx(vViewPosition);
   vec3 q1 = -dFdy(vViewPosition);
@@ -828,7 +921,7 @@ if (reliefOn) {
   rB *= inv;
   // (without axes there is nothing to turn the normal with)
   reliefOn = det > 0.0;
-#if NUM_DIR_LIGHTS > 0
+#if defined(RELIEF) && NUM_DIR_LIGHTS > 0
   // where the sun (the moon, at night) stands from the wall's point of view
   vec3 sunV = directionalLights[0].direction;
   vec3 sunW = vec3(dot(sunV, rT), dot(sunV, rB), dot(sunV, rN));
@@ -839,6 +932,10 @@ if (reliefOn) {
 #endif
 float winMask; float winLit; float glassy; vec3 litCol;
 facade(diffuseColor.rgb, winMask, winLit, glassy, litCol);
+// The scanned grain of the wall (read here, where every pixel runs it). It lies on the wall's face only:
+// not on the glass, nor in the openings, nor on the ironwork, nor in the holes the blast makes.
+vec4 gDet = surfaceDetail();
+float dWall = 1.0 - winMask;
 vec2 wallAO = wallOcclusion();
 // The café explosion: a blown-out cell opens onto the room behind it like a window with no glass.
 vec4 blast = blastWall();
@@ -945,18 +1042,22 @@ if (hole > 0.5) {
   winGlow *= 1.0 - gRail;
   reliefN = mix(reliefN, vec3(0.0, 0.0, 1.0), gRail);
 }
+dWall *= (1.0 - hole) * (1.0 - gRail);
+diffuseColor.rgb *= mix(1.0, gDet.w, dWall);
+reliefN.xy += gDet.xy * dWall * max(reliefN.z, 0.0);
 `;
 
 // The wall's relief turns the surface the light falls on: bumps lean it, a reveal's side faces across the opening.
 export const BUILDING_FRAG_NORMAL = /* glsl */ `
 #include <normal_fragment_maps>
-#ifdef RELIEF
+#if defined(RELIEF) || defined(DETAIL)
 if (reliefOn) normal = normalize(rT * reliefN.x + rB * reliefN.y + normal * reliefN.z);
 #endif
 `;
 
 export const BUILDING_FRAG_ROUGH = /* glsl */ `
 #include <roughnessmap_fragment>
+roughnessFactor = clamp(roughnessFactor * (1.0 + 1.2 * gDet.z * dWall), 0.04, 1.0);
 roughnessFactor = mix(roughnessFactor, 0.06 + 0.1 * (1.0 - glassy), winMask);
 `;
 export const BUILDING_FRAG_METAL = /* glsl */ `
@@ -1041,6 +1142,7 @@ uniform float uCreaseOn;
 uniform vec4 uBrush;    // x, z, radius, on
 uniform vec3 uSeaColor;
 uniform vec4 uLook;     // ambient occlusion strength, night glow strength (src/world/look.ts)
+${DETAIL_GLSL}
 
 float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p) {
@@ -1153,6 +1255,15 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
       float zebraX = road.x * step(hw.y, dl.y) * step(dl.y, hw.y + 3.5) * stripes(f.x / 1.1 - 0.75, 0.5, fw.x / 1.1);
       float zebraZ = road.y * step(hw.x, dl.x) * step(dl.x, hw.x + 3.5) * stripes(f.y / 1.1 - 0.75, 0.5, fw.y / 1.1);
       float paint = clamp(dashX + dashZ + zebraX + zebraZ, 0.0, 1.0);
+      // the paint fills the grain of the asphalt
+      setDetail(D_ASPHALT, f, M_ASPHALT, 1.0 - 0.6 * paint, 1.0, 0.0);
+      // a gutter of granite setts along each kerb, rows running with the street (not across the street that crosses it; src/city/surface.ts reads it the same way)
+      float settsX = road.x * (1.0 - walk.y) * step(hw.x - ${f(SIDEWALK + GUTTER)}, dl.x);
+      float settsZ = road.y * (1.0 - walk.x) * step(hw.y - ${f(SIDEWALK + GUTTER)}, dl.y);
+      if (settsX + settsZ > 0.5) {
+        col = vec3(0.25, 0.245, 0.24) * (0.85 + 0.3 * n);
+        setDetail(D_SETTS, f, M_SETTS, 1.0 - 0.6 * paint, 0.0, settsX);
+      }
       col = mix(col, vec3(0.85, 0.84, 0.78), paint * 0.85);
       float gutter = max(road.x * step(hw.x - ${f(SIDEWALK)} - 0.8, dl.x), road.y * step(hw.y - ${f(SIDEWALK)} - 0.8, dl.y));
       gPuddle = max(smoothstep(0.6 - pw, 0.66 + pw, pn), gutter * smoothstep(0.42 - pw, 0.5 + pw, pn));
@@ -1161,6 +1272,9 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
       col = pavement * (1.0 - joint * 0.12);
       float curb = stripe(dl.x - (hw.x - ${f(SIDEWALK)} + 0.15), 0.15, fw.x) * walk.x + stripe(dl.y - (hw.y - ${f(SIDEWALK)} + 0.15), 0.15, fw.y) * walk.y;
       col = mix(col, vec3(0.72, 0.7, 0.66), clamp(curb, 0.0, 1.0));
+      // the pavement's aggregate, and the kerb's dressed stone
+      if (curb > 0.5) setDetail(D_STONE, f, M_STONE, 1.0, 1.0, 0.0);
+      else setDetail(D_AGGREGATE, f, M_AGGREGATE, 0.9, 1.0, 0.0);
       rough = mix(0.8, 0.35, uWet);
       gPuddle = smoothstep(0.66 - pw, 0.7 + pw, pn);
     }
@@ -1168,7 +1282,9 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
     vec2 bc = (floor(f / ${f(BLOCK)}) + 0.5) * ${f(BLOCK)};
     vec2 q = f - bc;
     if (kind < 0.5) {
+      // the courtyard in the middle of a block is laid with setts
       col = vec3(0.45, 0.43, 0.4) * (0.9 + 0.2 * n);
+      setDetail(D_SETTS, f, M_SETTS, 1.0, 0.0, 0.0);
     } else if (kind < 1.5) {
       col = mix(vec3(0.24, 0.36, 0.15), vec3(0.34, 0.46, 0.2), n);
       float path = 1.0 - step(2.2, abs(abs(q.x) - abs(q.y)));
@@ -1176,18 +1292,24 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
       path = max(path, step(abs(r - 11.0), 2.0));
       col = mix(col, vec3(0.72, 0.66, 0.55), path);
       paved = path * 0.6;
-      if (r < 6.0) { col = vec3(0.12, 0.3, 0.38); rough = 0.08; pondWater = 1.0; }
-      else if (r < 7.0) { col = vec3(0.7, 0.68, 0.62); paved = 1.0; }
+      // gravel on the paths (the grass has none)
+      setDetail(D_GRAVEL, f, M_GRAVEL, path, 1.0, 0.0);
+      if (r < 6.0) { col = vec3(0.12, 0.3, 0.38); rough = 0.08; pondWater = 1.0; gDGain = 0.0; }
+      else if (r < 7.0) { col = vec3(0.7, 0.68, 0.62); paved = 1.0; setDetail(D_STONE, f, M_STONE, 1.0, 1.0, 0.0); }
     } else if (kind < 2.5) {
+      // stone flags, and setts laid in fans in the middle of the square
       col = mix(vec3(0.72, 0.69, 0.62), vec3(0.62, 0.6, 0.55), checker(f / 3.0, fw / 3.0));
-      if (length(q) < 4.5) col = vec3(0.5, 0.48, 0.45);
+      setDetail(D_STONE, f, M_STONE, 1.0, 1.0, 0.0);
+      if (length(q) < 4.5) { col = vec3(0.5, 0.48, 0.45); setDetail(D_FAN, f, M_FAN, 1.0, 0.0, 0.0); }
     } else if (kind < 3.5) {
       float seam = 1.0 - (1.0 - stripes(f.x / 6.0, 0.06, fw.x / 6.0)) * (1.0 - stripes(f.y / 6.0, 0.06, fw.y / 6.0));
       col = vec3(0.42, 0.43, 0.45) * (0.92 + 0.08 * seam);
+      setDetail(D_STONE, f, M_STONE, 1.0, 1.0, 0.0);
       rough = mix(0.6, 0.2, uWet);
       gPuddle = smoothstep(0.64 - pw, 0.7 + pw, pn);
     } else {
       col = pavement;
+      setDetail(D_AGGREGATE, f, M_AGGREGATE, 0.9, 1.0, 0.0);
     }
   }
 
@@ -1199,15 +1321,17 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
     float tw = length(fw) / (6.2832 * max(r0, 1e-3));
     paved = 1.0;
     gPuddle = 0.0;
-    if (r0 < 14.0) col = vec3(0.7, 0.67, 0.6) * (0.92 + 0.08 * stripes(turn * 12.0 - 0.75, 0.5, tw * 12.0));
-    else if (r0 < 24.0) { col = mix(vec3(0.26, 0.38, 0.17), vec3(0.34, 0.46, 0.2), n); paved = 0.0; }
-    else if (r0 < 25.0) col = vec3(0.75, 0.73, 0.68);
+    if (r0 < 14.0) { col = vec3(0.7, 0.67, 0.6) * (0.92 + 0.08 * stripes(turn * 12.0 - 0.75, 0.5, tw * 12.0)); setDetail(D_FAN, f, M_FAN, 1.0, 0.0, 0.0); }
+    else if (r0 < 24.0) { col = mix(vec3(0.26, 0.38, 0.17), vec3(0.34, 0.46, 0.2), n); paved = 0.0; gDGain = 0.0; }
+    else if (r0 < 25.0) { col = vec3(0.75, 0.73, 0.68); setDetail(D_STONE, f, M_STONE, 1.0, 1.0, 0.0); }
     else if (r0 < 40.0) {
       col = asphalt;
       rough = mix(0.85, 0.22, uWet);
-      col = mix(col, vec3(0.85, 0.84, 0.78), stripe(r0 - 32.5, 0.12, max(fw.x, fw.y)) * stripes(turn * 24.0 - 0.75, 0.5, tw * 24.0));
+      float ring = stripe(r0 - 32.5, 0.12, max(fw.x, fw.y)) * stripes(turn * 24.0 - 0.75, 0.5, tw * 24.0);
+      col = mix(col, vec3(0.85, 0.84, 0.78), ring);
+      setDetail(D_ASPHALT, f, M_ASPHALT, 1.0 - 0.6 * ring, 1.0, 0.0);
       gPuddle = smoothstep(0.6, 0.66, pn);
-    } else col = pavement * (0.94 + 0.06 * stripes(turn * 16.0 - 0.75, 0.5, tw * 16.0));
+    } else { col = pavement * (0.94 + 0.06 * stripes(turn * 16.0 - 0.75, 0.5, tw * 16.0)); setDetail(D_AGGREGATE, f, M_AGGREGATE, 0.9, 1.0, 0.0); }
   }
 
   // Ambient occlusion. The generator's layout is known here, so the shade that walls, trees and
@@ -1269,6 +1393,8 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
   // standing water is darker and a near-perfect mirror
   col *= 1.0 - 0.45 * gPuddle;
   rough = mix(rough, 0.03, gPuddle);
+  // snow fills the grain, and standing water lies flat over it
+  gDGain *= (1.0 - 0.8 * snowy) * (1.0 - smoothstep(0.2, 0.7, gPuddle / max(uWet, 1e-3)));
   // rings from the rain, faded out before they shimmer into noise
   float rippleFade = 1.0 - smoothstep(0.12, 0.4, fwidth(f.x) * 1.7);
   if (gPuddle > 0.01 && rippleFade > 0.0) gRipple = rainRipples(f) * rippleFade;
@@ -1282,6 +1408,7 @@ vec3 paintGround(vec2 f, out float rough, out vec3 glow) {
     vec3 water = uSeaColor * (0.85 + 0.25 * vnoise(f * 0.05 + uTime * 0.05));
     col = mix(col, water, sea);
     rough = mix(rough, 0.12, sea);
+    gDGain *= 1.0 - sea;
     gAO = mix(gAO, 1.0, sea);
     // Limbo's sea mirrors whatever is left of the city
     gWet = max(gWet, sea * 0.8);
@@ -1376,10 +1503,24 @@ if (gl_FrontFacing) {
   groundRough = 0.6;
   groundGlow = vec3(0.25, 0.55, 0.9) * lat * 0.8;
 }
+// The scanned grain of the surface close to (out here, where every pixel runs it): its cavities darken the paint.
+vec4 gDet = surfaceDetail();
+diffuseColor.rgb *= gDet.w;
 `;
 export const GROUND_FRAG_ROUGH = /* glsl */ `
 #include <roughnessmap_fragment>
-roughnessFactor = groundRough;
+roughnessFactor = clamp(groundRough * (1.0 + 1.2 * gDet.z), 0.02, 1.0);
+`;
+// The grain's relief leans the ground's normal, along the fabric's own axes (they turn with the folds).
+export const GROUND_FRAG_NORMAL = /* glsl */ `
+#include <normal_fragment_maps>
+#ifdef DETAIL
+{
+  vec3 dT; vec3 dB;
+  surfaceAxes(vFabric.xz, normal, dT, dB);
+  normal = normalize(normal + dT * gDet.x + dB * gDet.y);
+}
+#endif
 `;
 // Runs after lighting: on wet, flat street the plain sky reflection gives way to
 // the mirrored city (or, without a mirror, to the reflected street lamps).

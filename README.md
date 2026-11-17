@@ -42,7 +42,7 @@ It runs in any modern browser with WebGL 2, on desktop and on phones. Every faca
 
 - Walk and run through the streets, and fold the street ahead of you to watch the road rise into a wall, then climb it.
 - **Ride the fold (E):** the street you are standing on folds up and over the city and carries you with it, until you hang upside down 96 m above the districts behind you.
-- **The rotating hallway (H):** a hotel corridor rises around you and turns like a barrel. Its walls carry you up until you slide onto the next one, so you end up running along the walls and the ceiling. Walk out of either end to get back to the street.
+- **The rotating hallway (H):** a hotel corridor rises around you and turns like a barrel. Its walls carry you up until you slide onto the next one, so you end up running along the walls and the ceiling. Walk out of either end to get back to the street. The corridor (panelled doors with their numbers, wainscot and mouldings, sconces, a coffered ceiling) is modelled and lit in Blender from a script, with its lamps' light baked into a 110 kB file ([`art/hallway/`](art/hallway), section 5.12 of the city plan).
 - **Behind the dreamer (C):** swap the first-person eye for a camera over your own shoulder and watch yourself walk, run and jump, up the curl and along the hallway's walls. The camera keeps out of buildings and stays on your side of the folded street.
 - Trees, lamps, buildings and the monument are solid. The projections walk the sidewalks with you: men and women in suits, long coats, dresses and hats, some with a briefcase, each at their own pace. Now and then one stops at a corner. When the dream grows unsteady they turn their heads to watch you pass, then stop and stare, then run at you.
 - Press K for the kick: every fold collapses at once with a ripple and a BRAAAM, and you wake up a level.
@@ -110,7 +110,7 @@ The [city plan](docs/CITY_PLAN.md) covers the districts, the rules of the dream,
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm test             # fold algebra, generator, hallway, mirror, café explosion, lighting-layout, people and sound tests
+npm test             # fold algebra, generator, hallway and its model, mirror, café explosion, lighting-layout, people and sound tests
 npm run build        # static site in dist/
 npm run build:single # one self-contained HTML file in dist-single/
 npm run bench        # screenshots of eight fixed views per quality tier, in bench/ (needs Playwright)
@@ -131,14 +131,15 @@ Built with TypeScript, [Three.js](https://threejs.org) and [Vite](https://vite.d
 src/
   core/    fold algebra, grid constants, seeded noise
   city/    chunk generator, shaders, materials, slab allocator, streamer
-  world/   sky, haze and weather, dream levels and the look's dials, the projections crowd, the rotating hallway, the café explosion
+  world/   sky, haze and weather, dream levels and the look's dials, the projections crowd, the rotating hallway and its baked model, the café explosion
   people/  the shared skeleton and its clips, bodies and clothes built in code, the dreamer's figure, the instanced crowd
   modes/   architect, dream walk, riding the fold, dreamscape presets
   game/    Heist mode: the job's rules, and its sleep machines, kicks, totem and target
   fx/      GPU picking, audio (the generated drone, the soundscape mixer, the packed recordings), post-processing, the wet-street mirror, lamp halos
   ui/      styles and the HUD totem
-tests/     fold, generator, hallway, ride, mirror, café explosion, Heist mode, lighting-layout, people and sound tests
-scripts/   the single-file build, the screenshot bench, the listening bench, and the animation and sound packers
+tests/     fold, generator, hallway and its model, ride, mirror, café explosion, Heist mode, lighting-layout, people and sound tests
+scripts/   the single-file build, the screenshot bench, the listening bench, and the animation, sound and hallway packers
+art/       the Blender script the hallway's corridor is built and baked from, and the scene it made
 docs/      the city plan and screenshots
 ```
 

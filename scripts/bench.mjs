@@ -87,6 +87,16 @@ const VIEWS = [
   },
   { id: 'run', extra: true, note: 'Behind the dreamer, running', level: 1, third: true, at: [69.5, -120, 0, 0.06], keys: ['KeyW'], frames: 50, phase: 0.3 },
   { id: 'sprint', extra: true, note: 'Behind the dreamer, sprinting', level: 1, third: true, at: [69.5, -120, 0, 0.06], keys: ['KeyW', 'ShiftLeft'], frames: 43, phase: 3.3 },
+  // The rotating hallway, raised on the boulevard and held at a fixed turn (hall.angle, radians): the
+  // dreamer stands 6 m inside an open end, or at hall.at (across, along the corridor) facing hall.yaw
+  // from its axis; hall.out puts them back on the street at (x, z, heading) to look at it from outside.
+  { id: 'hall', extra: true, note: 'Inside the hallway, looking along it', level: 1, at: [0.8, 124, 0, 0.06], hall: { angle: 0 } },
+  { id: 'hall-door', extra: true, note: 'Inside the hallway: a door and a sconce', level: 1, at: [0.8, 124, 0, 0.12], hall: { angle: 0, at: [-1.4, -16.2], yaw: 1.95 } },
+  { id: 'hall-roll', extra: true, note: 'Inside the hallway, rolled over: walking on its wall', level: 1, at: [0.8, 124, 0, 0.02], hall: { angle: 1.2, at: [0, -18] } },
+  { id: 'hall-ceiling', extra: true, note: 'Inside the hallway, looking up at the ceiling', level: 1, at: [0.8, 124, 0, 0.75], hall: { angle: 0, at: [1.2, -10], yaw: -0.25 } },
+  { id: 'hall-third', extra: true, note: 'Behind the dreamer in the hallway, half turned', level: 1, third: true, at: [0.8, 124, 0, 0.1], hall: { angle: 0.45, at: [0, -14] } },
+  { id: 'hall-street', extra: true, note: 'The hallway from the street, half turned', level: 1, at: [0.8, 124, 0, 0.1], hall: { angle: 0.5, out: [8, 101, -0.42, 0.12] } },
+  { id: 'hall-night', extra: true, note: 'The hallway from the street at midnight', level: 1, time: 1, at: [0.8, 124, 0, 0.1], hall: { angle: 0.5, out: [8, 101, -0.42, 0.12] } },
   { id: 'crowd', extra: true, note: 'Pedestrians at a busy crossing', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, frames: 40 },
   { id: 'stares', extra: true, note: 'The dream unsteady: the crowd stops and stares', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, unstable: 0.55, frames: 160, dt: 0.05 },
 ];
@@ -125,7 +135,7 @@ function loadPlaywright() {
   }
 }
 
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.jpg': 'image/jpeg', '.png': 'image/png' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.jpg': 'image/jpeg', '.png': 'image/png', '.glb': 'model/gltf-binary' };
 
 function serve(dir) {
   const server = createServer((req, res) => {
@@ -141,8 +151,10 @@ function serve(dir) {
 }
 
 /** Runs in the page: set the view up, fast-forward until the city has streamed in, draw one frame. */
-function shoot([v, time]) {
+async function shoot([v, time]) {
   const d = window.dream;
+  // wait for anything still loading (the hallway's model; builds before it have none)
+  await d.hallway.ready;
   d.audio.start = () => {};
   d.start(v.at ? 'walk' : 'architect');
   d.pendingPreset = null;
@@ -170,6 +182,34 @@ function shoot([v, time]) {
   d.settle();
   d.instability = 0;
   d.flash = 0;
+  if (v.hall) {
+    // raise the hallway around the dreamer and hold it still at the view's turn
+    const h = d.hallway;
+    d.walk.toggleHallway();
+    h.settle();
+    const update = h.update.bind(h);
+    h.update = (dt, t, folds) => {
+      h.age = 0;
+      h.spin = 0;
+      h.angle = v.hall.angle;
+      update(dt, t, folds);
+    };
+    if (v.hall.out) {
+      d.walk.teleport(v.hall.out[0], v.hall.out[1], v.hall.out[2]);
+      d.walk.pitch = v.hall.out[3];
+    } else if (h.rider) {
+      if (v.hall.at) {
+        h.rider.p.x = v.hall.at[0];
+        h.rider.p.z = v.hall.at[1];
+      }
+      d.walk.yaw = h.axisYaw + (v.hall.yaw ?? 0);
+      d.walk.bodyYaw = d.walk.yaw;
+      d.walk.pitch = v.at[3];
+    }
+    // let the dreamer find their feet on whichever wall is lowest, and the camera catch up
+    d.step(45, 1 / 30, false);
+    d.walk.pitch = v.hall.out ? v.hall.out[3] : v.at[3];
+  }
   if (v.gather) {
     // bring the crowd in around the walker (they are spread over many blocks otherwise)
     d.crowd.opts.spread = v.gather;

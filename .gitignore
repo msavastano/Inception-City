@@ -5,3 +5,6 @@ dist-single
 .DS_Store
 bench/
 listen/
+
+# Blender build output (art/hallway/out): the .blend is copied up a level, the rest is regenerated
+art/hallway/out/

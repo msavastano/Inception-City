@@ -527,7 +527,7 @@ void facade(inout vec3 col, out float win, out float lit, out float glassy, out 
     // Old-town brick.
     float fh = 3.1;
     // the faces of the bricks have the grain of fired clay, finer than the stone's
-    setDetail(D_AGGREGATE, grainAt, 0.8, 0.6, 1.0, 0.0);
+    setDetail(D_AGGREGATE, grainAt, 0.8, 1.0, 1.0, 0.0);
     float level = floor(v / fh);
     float fv = fract(v / fh) * fh;
     float cy = fract(v * 4.0);

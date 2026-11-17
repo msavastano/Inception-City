@@ -300,6 +300,11 @@ async function run(o) {
         try {
           localStorage.clear();
         } catch {}
+        // never take the mouse: a headless browser on Windows still has a hidden window, and pointer
+        // lock there pins the real cursor to it. Refusing the lock leaves Dream Walk on drag-to-look.
+        Element.prototype.requestPointerLock = function () {
+          return Promise.reject(new Error('the bench does not lock the pointer'));
+        };
       });
       const hash = `s=${SEED}&q=${tier}&l=${v.level}${v.time !== undefined ? `&t=${v.time}` : ''}${o.hash ? `&${o.hash}` : ''}`;
       await page.goto(`${base}#${hash}`);

@@ -318,6 +318,8 @@ The buildings are boxes, and for a long time their windows were paint: fine from
 
 `#relief=` scales the lot from the link (0 is flat walls, 1 the default, 2 for deep-set windows).
 
+Timed on an integrated GPU (AMD Radeon Vega 8, 1280 × 720, the middle of three page loads per view), the relief costs Medium about 2 to 3 ms a frame on views of nearby facades, about 5 percent, and nothing on Low, which compiles it out. Frame times on that machine drift by more than that between runs, so time before and after alternately (`npm run bench -- --gpu --time --repeat 3`).
+
 Before and after, from the bench (Medium, the same seed and view):
 
 ![A sunlit Haussmann front from across the street, before and after](images/walls-with-depth/facade-medium.jpg)
@@ -325,6 +327,10 @@ Before and after, from the bench (Medium, the same seed and view):
 ![Along the same block from its own sidewalk, before and after](images/walls-with-depth/windows-medium.jpg)
 
 ![An old-town brick front, before and after](images/walls-with-depth/brick-medium.jpg)
+
+![A cornice, a mansard and its dormers, before and after](images/walls-with-depth/roofline-medium.jpg)
+
+![The Haussmann front at midnight, before and after](images/walls-with-depth/facade-night-medium.jpg)
 
 ## 6. Scaling
 

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { groundAt, greenAt, shelterAt } from '../src/city/surface';
 import { BlockKind, blockKind } from '../src/city/generator';
-import { BLOCK, SIDEWALK, streetHalfWidth } from '../src/core/config';
+import { BLOCK, GUTTER, SIDEWALK, streetHalfWidth } from '../src/core/config';
 import { SOUNDS } from '../src/fx/sounds/manifest';
 import { BED_NAMES, BedName, bedRate, CROWD_VOICES, crowdVoices, CrowdVoice, footing, hallFooting, makeLoop, mixBeds, Scene, toEar } from '../src/fx/soundscape';
 import { Projections } from '../src/world/projections';
@@ -54,7 +54,9 @@ describe('what is underfoot', () => {
       const hw = streetHalfWidth(line);
       const z = 6.5 * BLOCK;
       expect(groundAt(line * BLOCK, z, SEED)).toBe('asphalt');
-      expect(groundAt(line * BLOCK + hw - SIDEWALK - 0.2, z, SEED)).toBe('asphalt');
+      expect(groundAt(line * BLOCK + hw - SIDEWALK - GUTTER - 0.2, z, SEED)).toBe('asphalt');
+      // the gutter of setts along the kerb is stone underfoot
+      expect(groundAt(line * BLOCK + hw - SIDEWALK - 0.2, z, SEED)).toBe('paving');
       expect(groundAt(line * BLOCK + hw - SIDEWALK + 0.2, z, SEED)).toBe('paving');
       expect(groundAt(line * BLOCK - hw + 0.2, z, SEED)).toBe('paving');
     }

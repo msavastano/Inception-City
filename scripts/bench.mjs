@@ -20,6 +20,8 @@
 // renderer drew it, so a time from the software renderer cannot be mistaken for a real one.
 // A frame time moves from one page load to the next by more than a small change costs, so
 // --repeat 3 loads each view three times and reports the middle time and the spread.
+// --settle 3000 starts every view 3 s after its page opened, whatever the build had to load first,
+// which keeps a build that loads more (and so starts later) comparable with one that loads less.
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -97,6 +99,13 @@ const VIEWS = [
   { id: 'hall-third', extra: true, note: 'Behind the dreamer in the hallway, half turned', level: 1, third: true, at: [0.8, 124, 0, 0.1], hall: { angle: 0.45, at: [0, -14] } },
   { id: 'hall-street', extra: true, note: 'The hallway from the street, half turned', level: 1, at: [0.8, 124, 0, 0.1], hall: { angle: 0.5, out: [8, 101, -0.42, 0.12] } },
   { id: 'hall-night', extra: true, note: 'The hallway from the street at midnight', level: 1, time: 1, at: [0.8, 124, 0, 0.1], hall: { angle: 0.5, out: [8, 101, -0.42, 0.12] } },
+  // Close to the surfaces, where the detail textures show (and where they fade, a few tens of metres on).
+  { id: 'road', extra: true, note: 'Close: the asphalt of a street, looking down it', level: 1, at: [66.5, -104, 0.06, -0.32] },
+  { id: 'pavement', extra: true, note: 'Close: the paving at your feet, the kerb and the gutter', level: 1, at: [69.8, -104, -0.35, -0.62] },
+  { id: 'stone', extra: true, note: 'Close: a sunlit Haussmann wall from the foot of it', level: 1, at: [18, 68.4, 0.12, 0.2] },
+  { id: 'brick-close', extra: true, note: 'Close: an old-town brick wall', level: 1, at: [-86, 131.5, 0.2, 0.15] },
+  { id: 'concrete-close', extra: true, note: 'Close: a concrete front', level: 1, at: [-290, -124.5, 0.2, 0.12] },
+  { id: 'rain-close', extra: true, note: 'Close: wet paving and asphalt in the rain', level: 2, at: [9.5, -140, 0.1, -0.4] },
   { id: 'crowd', extra: true, note: 'Pedestrians at a busy crossing', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, frames: 40 },
   { id: 'stares', extra: true, note: 'The dream unsteady: the crowd stops and stares', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, unstable: 0.55, frames: 160, dt: 0.05 },
 ];
@@ -119,6 +128,7 @@ function args() {
     hash: get('hash', ''),
     time: a.includes('--time'),
     repeat: Math.max(1, Number(get('repeat', '1')) || 1),
+    settle: Math.max(0, Number(get('settle', '0')) || 0),
     gpu: a.includes('--gpu'),
     channel: get('channel', ''),
     compare: compare >= 0 ? [resolve(a[compare + 1]), resolve(a[compare + 2])] : null,
@@ -135,7 +145,7 @@ function loadPlaywright() {
   }
 }
 
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.jpg': 'image/jpeg', '.png': 'image/png', '.glb': 'model/gltf-binary' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.glb': 'model/gltf-binary' };
 
 function serve(dir) {
   const server = createServer((req, res) => {
@@ -151,10 +161,15 @@ function serve(dir) {
 }
 
 /** Runs in the page: set the view up, fast-forward until the city has streamed in, draw one frame. */
-async function shoot([v, time]) {
+async function shoot([v, time, settle]) {
   const d = window.dream;
-  // wait for anything still loading (the hallway's model; builds before it have none)
+  // wait for anything still loading (the hallway's model and the surface detail; builds before them have none)
   await d.hallway.ready;
+  await d.detailReady;
+  // and, with --settle, until that many milliseconds after the page opened, so that a build which has more to load
+  // and one which has less start the view at the same moment (the city runs on its own clock while it waits)
+  const wait = (settle ?? 0) - performance.now();
+  if (wait > 0) await new Promise((done) => setTimeout(done, wait));
   d.audio.start = () => {};
   d.start(v.at ? 'walk' : 'architect');
   d.pendingPreset = null;
@@ -292,11 +307,16 @@ async function run(o) {
         try {
           localStorage.clear();
         } catch {}
+        // never take the mouse: a headless browser on Windows still has a hidden window, and pointer
+        // lock there pins the real cursor to it. Refusing the lock leaves Dream Walk on drag-to-look.
+        Element.prototype.requestPointerLock = function () {
+          return Promise.reject(new Error('the bench does not lock the pointer'));
+        };
       });
       const hash = `s=${SEED}&q=${tier}&l=${v.level}${v.time !== undefined ? `&t=${v.time}` : ''}${o.hash ? `&${o.hash}` : ''}`;
       await page.goto(`${base}#${hash}`);
       await page.waitForFunction(() => window.dream, null, { timeout: 120000 });
-      return await page.evaluate(shoot, [v, o.time]);
+      return await page.evaluate(shoot, [v, o.time, o.settle]);
     } finally {
       await context.close().catch(() => {});
     }

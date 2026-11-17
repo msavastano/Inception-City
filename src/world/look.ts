@@ -13,6 +13,7 @@ import * as THREE from 'three';
  *   glow         0 .. 2                   lamp halos and the lamps' wash on the facades at night
  *   relief       0 .. 2                   depth of the window reveals and of the walls' joints, ledges and cornices
  *   hall         0 | 1                    the rotating hallway as the modelled corridor (1) or the painted box it replaced (0)
+ *   detail       0 .. 2.5                 the scanned grain of the surfaces close to: asphalt, paving, setts, stone (0 none)
  *   exposure, contrast, saturation        multiply every level's own
  */
 export type ToneCurve = 'neutral' | 'agx' | 'aces';
@@ -41,6 +42,8 @@ export const LOOK = {
   relief: 1,
   /** The rotating hallway: the corridor modelled and baked in Blender (1), or the painted box before it (0). Low quality always has the box. */
   hall: 1,
+  /** The scanned grain of the surfaces close to (0 none, 1 as designed: relief, roughness and cavities). Low quality has none. */
+  detail: 1,
   /** Multiply every level's exposure and grade. */
   exposure: 1,
   contrast: 1,
@@ -51,7 +54,7 @@ export const LOOK = {
 export function readLook(params: URLSearchParams): void {
   const tone = params.get('tone');
   if (tone && tone in TONE_CURVES) LOOK.tone = tone as ToneCurve;
-  for (const key of ['ao', 'haze', 'glow', 'relief', 'hall', 'exposure', 'contrast', 'saturation'] as const) {
+  for (const key of ['ao', 'haze', 'glow', 'relief', 'hall', 'detail', 'exposure', 'contrast', 'saturation'] as const) {
     const v = params.get(key);
     if (v !== null && v !== '' && Number.isFinite(Number(v))) LOOK[key] = Math.max(0, Number(v));
   }

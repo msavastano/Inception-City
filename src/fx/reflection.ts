@@ -103,10 +103,17 @@ export class WetReflection {
     const autoShadow = renderer.shadowMap.autoUpdate;
     // last frame's shadow maps are fine for a blurred reflection
     renderer.shadowMap.autoUpdate = false;
+    // the surfaces' scanned grain would be lost in a blurred reflection, so there it fades out before it starts
+    const detail = U.uDetail.value;
+    const fade = [detail.z, detail.w];
+    detail.z = -2;
+    detail.w = -1;
     const prev = renderer.getRenderTarget();
     renderer.setRenderTarget(this.target);
     renderer.render(scene, this.camera);
     renderer.setRenderTarget(prev);
+    detail.z = fade[0];
+    detail.w = fade[1];
     renderer.shadowMap.autoUpdate = autoShadow;
     hidden.forEach((o, i) => (o.visible = shown[i]));
 

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { MAX_FOLDS } from '../core/config';
 import { boneTexture, boneTextureSize } from '../people/crowd';
+import { DETAIL } from './detail/manifest';
 import { blendIntoSky, patchHaze } from '../world/atmosphere';
 import {
   BUILDING_FRAG_AO,
@@ -14,6 +15,7 @@ import {
   GROUND_FRAG_COLOR,
   GROUND_FRAG_EMISSIVE,
   GROUND_FRAG_HEAD,
+  GROUND_FRAG_NORMAL,
   GROUND_FRAG_ROUGH,
   GROUND_FRAG_WET,
   GROUND_VERT_HEAD,
@@ -71,6 +73,11 @@ export const U = {
   uLook: { value: new THREE.Vector4(1, 1, 0, 0) },
   // The walls' relief (set per quality tier in src/app.ts): depth of the window reveals, strength of the bumps, where the reveals start and finish fading (metres).
   uRelief: { value: new THREE.Vector4(1, 1, 30, 44) },
+  // The close-up surface detail (src/city/detail.ts): one layer per kind of surface, with its relief, roughness and cavities.
+  // Until the real one has loaded this is one flat texel per layer, which changes nothing.
+  tDetail: { value: flatDetail() as THREE.DataArrayTexture },
+  // How strong the detail's relief is, how strong its cavities, and where it starts and finishes fading (metres from the eye; set per quality tier in src/app.ts).
+  uDetail: { value: new THREE.Vector4(1, 1, 22, 36) },
   // The air (src/world/atmosphere.ts). The sky's colours are written by the Environment.
   uHaze: { value: new THREE.Vector4(0.001, 0.001, 1 / 40, 0.1) },
   uSkyTop: { value: new THREE.Color() },
@@ -85,6 +92,15 @@ export const U = {
 };
 
 type Kind = 'building' | 'ground' | 'prop' | 'person' | 'shard';
+
+/** One texel per detail layer, standing for a flat surface of average roughness with no cavities. */
+function flatDetail(): THREE.DataArrayTexture {
+  const n = DETAIL.layers.length;
+  const ao = Math.round(DETAIL.aoMean * 255);
+  const tex = new THREE.DataArrayTexture(new Uint8Array(4 * n).map((_, i) => (i % 4 === 3 ? ao : 128)), 1, 1, n);
+  tex.needsUpdate = true;
+  return tex;
+}
 
 const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [string, string][] }> = {
   building: {
@@ -107,6 +123,7 @@ const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [s
     replace: [
       ['#include <color_fragment>', GROUND_FRAG_COLOR],
       ['#include <roughnessmap_fragment>', GROUND_FRAG_ROUGH],
+      ['#include <normal_fragment_maps>', GROUND_FRAG_NORMAL],
       ['#include <emissivemap_fragment>', GROUND_FRAG_EMISSIVE],
       ['#include <aomap_fragment>', GROUND_FRAG_WET],
     ],
@@ -168,6 +185,27 @@ function applyWallRelief(mat: THREE.MeshStandardMaterial): void {
   mat.needsUpdate = true;
 }
 
+/** Every building and ground material made, so the surface detail can be compiled in or out of all of them at once. */
+const detailMaterials: THREE.MeshStandardMaterial[] = [];
+let surfaceDetail = true;
+
+/**
+ * Compile the close-up surface detail (the scanned relief of asphalt, stone and setts, src/city/detail.ts) into
+ * the building and ground shaders, or leave it out so they cost what they did before it. Off on Low.
+ */
+export function setSurfaceDetail(on: boolean): void {
+  if (on === surfaceDetail) return;
+  surfaceDetail = on;
+  for (const mat of detailMaterials) applySurfaceDetail(mat);
+}
+
+function applySurfaceDetail(mat: THREE.MeshStandardMaterial): void {
+  const defines = (mat.defines ??= {});
+  if (surfaceDetail) defines.DETAIL = '';
+  else delete defines.DETAIL;
+  mat.needsUpdate = true;
+}
+
 /** The person shaders read the crowd's bone texture: bake it once, the first time anyone needs it. */
 function needBones(kind: Kind): void {
   if (kind !== 'person' || U.tBones.value) return;
@@ -207,6 +245,10 @@ export function foldedMaterial(kind: Kind, params: THREE.MeshStandardMaterialPar
   if (kind === 'building') {
     buildingMaterials.push(mat);
     applyWallRelief(mat);
+  }
+  if (kind === 'building' || kind === 'ground') {
+    detailMaterials.push(mat);
+    applySurfaceDetail(mat);
   }
   return mat;
 }

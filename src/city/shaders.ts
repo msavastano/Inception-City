@@ -62,13 +62,15 @@ vec4 surfaceDetail() {
   float k = gDGain * (1.0 - smoothstep(uDetail.z, uDetail.w, length(vViewPosition)));
   vec4 d = vec4(0.0, 0.0, 0.0, 1.0);
   if (k > 0.0) {
-    d = detailTap(uv, gx, gy);
-    if (gDGrain > 0.5) {
-      // a second read, 1.4 times larger and turned by a third of a radian, mixed in by a slow noise: no tile repeats exactly
+    // Plain grain is read at two scales, the second 1.4 times larger and turned by a third of a radian, mixed by a
+    // slow noise so that no tile repeats exactly. Where the noise has settled on one of them only that one is read.
+    float m = gDGrain > 0.5 ? smoothstep(0.35, 0.65, dNoise(uv * 0.43)) : 0.0;
+    if (m < 0.999) d = detailTap(uv, gx, gy);
+    if (m > 0.001) {
       const mat2 R = mat2(0.9450, 0.3271, -0.3271, 0.9450);
       vec4 e = detailTap(R * uv * 0.71 + vec2(0.37, 0.61), R * gx * 0.71, R * gy * 0.71);
       e.xy = e.xy * R;
-      d = mix(d, e, smoothstep(0.25, 0.75, dNoise(uv * 0.43)));
+      d = m < 0.999 ? mix(d, e, m) : e;
     }
     if (gDTurn > 0.5) d.xy = d.yx;
     d.xy *= k * uDetail.x;
@@ -932,9 +934,8 @@ if (reliefOn) {
 #endif
 float winMask; float winLit; float glassy; vec3 litCol;
 facade(diffuseColor.rgb, winMask, winLit, glassy, litCol);
-// The scanned grain of the wall (read here, where every pixel runs it). It lies on the wall's face only:
-// not on the glass, nor in the openings, nor on the ironwork, nor in the holes the blast makes.
-vec4 gDet = surfaceDetail();
+// The scanned grain lies on the wall's face only: not on the glass, nor in the openings, nor on the
+// ironwork, nor in the holes the blast makes. It is read at the end, where every pixel runs it.
 float dWall = 1.0 - winMask;
 vec2 wallAO = wallOcclusion();
 // The café explosion: a blown-out cell opens onto the room behind it like a window with no glass.
@@ -1043,6 +1044,8 @@ if (hole > 0.5) {
   reliefN = mix(reliefN, vec3(0.0, 0.0, 1.0), gRail);
 }
 dWall *= (1.0 - hole) * (1.0 - gRail);
+// (read after the room trace, so that its result does not have to be kept through it)
+vec4 gDet = surfaceDetail();
 diffuseColor.rgb *= mix(1.0, gDet.w, dWall);
 reliefN.xy += gDet.xy * dWall * max(reliefN.z, 0.0);
 `;

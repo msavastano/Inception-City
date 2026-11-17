@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { foldedDepthMaterial, foldedMaterial, treeDepthMaterial, treeMaterial, U } from './city/materials';
+import { foldedDepthMaterial, foldedMaterial, treeDepthMaterial, treeMaterial, treePrepassMaterial, U } from './city/materials';
 import { leafTexture, treeGeometry } from './city/trees';
 import { rng } from './core/rng';
 import { guard, pedestrian, People, TARGET_OUTFIT } from './people/crowd';
@@ -111,6 +111,14 @@ if (trees) {
   mesh.castShadow = mesh.receiveShadow = true;
   mesh.frustumCulled = false;
   scene.add(mesh);
+  // their depth first, as in the city (&nopre: without it, the colour pass writing its own depth)
+  if (params.has('nopre')) (mesh.material as THREE.Material).depthWrite = true;
+  else {
+    const pre = new THREE.Mesh(g, treePrepassMaterial(lod));
+    pre.renderOrder = -1;
+    pre.frustumCulled = false;
+    scene.add(pre);
+  }
 }
 
 const yaw = (Number(params.get('yaw') ?? 25) * Math.PI) / 180;

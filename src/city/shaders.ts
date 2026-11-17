@@ -1690,6 +1690,7 @@ attribute vec4 aCard;    // a far leaf card's corner, from its centre (metres), 
 #endif
 uniform vec4 uTrees;     // the near version fades out between x and y metres; share of the leaves the season has taken; wind
 uniform vec3 uEye;       // the main camera, so the shadow and the mirror pick the same version it sees
+uniform vec2 uTreeShadow; // trees cast shadows out to here from the eye (metres: fade start, end)
 varying vec2 vUv;
 varying vec4 vTree;      // part, sky, tone, how much of this version shows (0 to 1)
 varying vec3 vFabric;
@@ -1714,9 +1715,13 @@ void treeVertex(out vec3 P, out vec3 N) {
   vec3 base = vec3(iTree.x, 0.0, iTree.y);
   vec3 baseN = vec3(0.0, 1.0, 0.0);
   applyFolds(iTree.xy, base, baseN);
-  float near = 1.0 - smoothstep(uTrees.x, uTrees.y, distance(base, uEye));
+  float fromEye = distance(base, uEye);
+  float near = 1.0 - smoothstep(uTrees.x, uTrees.y, fromEye);
 #ifdef TREE_SHADOW
   near = step(0.5, near);
+  // far out, a tree's shadow shrinks away (each leaf card's shadow is many shadow-map texels to fill)
+  float shadowReach = 1.0 - smoothstep(uTreeShadow.x, uTreeShadow.y, fromEye);
+  if (shadowReach <= 0.0) { treeNobody(P, N); return; }
 #endif
 #ifdef TREE_FAR
   float show = 1.0 - near;
@@ -1726,6 +1731,9 @@ void treeVertex(out vec3 P, out vec3 N) {
   if (show <= 0.0) { treeNobody(P, N); return; }
 
   float scale = iTree.w * smoothstep(iLook.y, iLook.y + 1.4, uTime);
+#ifdef TREE_SHADOW
+  scale *= shadowReach;
+#endif
   vec3 local = position;
   vec3 nrm = normal;
   if (fract(iLook.w * 0.5) > 0.25) { local.z = -local.z; nrm.z = -nrm.z; }
@@ -1834,14 +1842,18 @@ float treeLampLight(vec3 p) {
 }
 `;
 
-export const TREE_FRAG_COLOR = /* glsl */ `
-#include <color_fragment>
-// the version on its way out leaves a dither pattern that the other one fills
+// The version on its way out leaves a dither pattern that the other one fills.
+const TREE_FADE_DISCARD = /* glsl */ `
 #ifdef TREE_FAR
 if (treeDither(gl_FragCoord.xy) < 1.0 - vTree.w) discard;
 #else
 if (treeDither(gl_FragCoord.xy) >= vTree.w) discard;
 #endif
+`;
+
+export const TREE_FRAG_COLOR = /* glsl */ `
+#include <color_fragment>
+${TREE_FADE_DISCARD}
 float treeSky = vTree.y;
 float treeRough = 0.92;
 vec3 treeAlbedo;
@@ -1896,6 +1908,32 @@ export const TREE_FRAG_AO = /* glsl */ `
   reflectedLight.indirectSpecular *= mix(1.0, skyAO, 0.8);
 }
 `;
+
+/**
+ * The depth pass drawn before the trees' colour (see treePrepassMaterial in src/city/materials.ts): the same leaves,
+ * cut out exactly as the colour pass cuts them (the same texel, the same test, the same alpha to coverage), so that
+ * the colour pass then lights only the leaf in front at each pixel.
+ */
+export const TREE_PREPASS_FRAG_HEAD = /* glsl */ `
+${TREE_FRAG_PARS}
+float treeDither(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+`;
+export const TREE_PREPASS_FRAG_TEST = /* glsl */ `
+#include <alphatest_fragment>
+${TREE_FADE_DISCARD}
+float treeCover = 1.0;
+if (vTree.x > 0.5) {
+  vec4 lt = texture2D(tLeaves, vUv);
+  float keep = smoothstep(uTrees.z - 0.06, uTrees.z + 0.06, lt.r);
+  treeCover = max(lt.a * keep, lt.g);
+}
+// (three.js's alpha test with alpha to coverage, as the colour pass has it)
+treeCover = smoothstep(0.5, 0.5 + fwidth(treeCover), treeCover);
+if (treeCover == 0.0) discard;
+`;
+export const TREE_PREPASS_FRAG_OUT = /* glsl */ `
+gl_FragColor.a = treeCover;
+}`;
 
 /**
  * The shadow pass: leaves cast the shade of their clusters, read from a smaller mip level than the eye sees so

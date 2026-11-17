@@ -39,6 +39,9 @@ import {
   SHARD_FRAG_ROUGH,
   SHARD_VERT_HEAD,
   TREE_DEPTH_FRAG_HEAD,
+  TREE_PREPASS_FRAG_HEAD,
+  TREE_PREPASS_FRAG_OUT,
+  TREE_PREPASS_FRAG_TEST,
   TREE_DEPTH_FRAG_TEST,
   TREE_FRAG_AO,
   TREE_FRAG_COLOR,
@@ -105,6 +108,9 @@ export const U = {
   uTrees: { value: new THREE.Vector4(48, 60, 0, 1) },
   // The main camera, written every frame: the shadow and mirror passes choose a tree's version by it too.
   uEye: { value: new THREE.Vector3() },
+  // How far from the eye the trees still cast their shadows (metres: start of the fade, end): further out
+  // their shade on the ground is painted (crownShade in the ground painter), at no cost per leaf.
+  uTreeShadow: { value: new THREE.Vector2(150, 180) },
 };
 
 /** No leaves and no twigs: what the trees wear until the leaf atlas has been drawn. */
@@ -314,7 +320,8 @@ export function foldedDepthMaterial(kind: Kind): THREE.MeshDepthMaterial {
  * frame's MSAA becomes soft-edged (alpha to coverage); both sides of a card are lit alike.
  */
 export function treeMaterial(lod: 'near' | 'far'): THREE.MeshStandardMaterial {
-  const mat = foldedMaterial('tree', { side: THREE.DoubleSide, alphaTest: 0.5, alphaToCoverage: true });
+  // (the depth is written by the pass before, treePrepassMaterial; not writing it here lets the GPU skip hidden leaves)
+  const mat = foldedMaterial('tree', { side: THREE.DoubleSide, alphaTest: 0.5, alphaToCoverage: true, depthWrite: false });
   if (lod === 'far') mat.defines = { ...mat.defines, TREE_FAR: '' };
   const folded = mat.onBeforeCompile;
   mat.onBeforeCompile = (shader, renderer) => {
@@ -344,6 +351,35 @@ export function treeDepthMaterial(lod: 'near' | 'far'): THREE.MeshDepthMaterial 
     shader.fragmentShader = f;
   };
   mat.customProgramCacheKey = () => `inception-depth-tree-${lod}`;
+  return mat;
+}
+
+/**
+ * The trees' depth, drawn before their colour. A crown is many leaf cards deep, and a card that is mostly gaps
+ * cannot hide what is behind it from the GPU until its leaves have been worked out, so without this every layer of
+ * leaves would be lit and shaded, each over the last. This pass finds the leaf in front at each pixel cheaply
+ * (one texel read); the colour pass then tests against it without writing depth, so the GPU skips the hidden
+ * leaves before shading them. Its depth is pushed back a hair, so the colour pass always finds its own leaf.
+ */
+export function treePrepassMaterial(lod: 'near' | 'far'): THREE.MeshDepthMaterial {
+  const mat = foldedDepthMaterial('tree');
+  mat.side = THREE.DoubleSide;
+  mat.defines = { TREE_PREPASS: '', ...(lod === 'far' ? { TREE_FAR: '' } : {}) };
+  mat.colorWrite = false;
+  mat.alphaToCoverage = true;
+  mat.polygonOffset = true;
+  mat.polygonOffsetFactor = 1;
+  mat.polygonOffsetUnits = 1;
+  const vertexOnly = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader, renderer) => {
+    vertexOnly.call(mat, shader, renderer);
+    let f = shader.fragmentShader;
+    f = f.replace(must(f, '#include <common>'), `#include <common>\n${TREE_PREPASS_FRAG_HEAD}`);
+    f = f.replace(must(f, '#include <alphatest_fragment>'), TREE_PREPASS_FRAG_TEST);
+    const end = f.lastIndexOf('}');
+    shader.fragmentShader = f.slice(0, end) + TREE_PREPASS_FRAG_OUT + f.slice(end + 1);
+  };
+  mat.customProgramCacheKey = () => `inception-prepass-tree-${lod}`;
   return mat;
 }
 

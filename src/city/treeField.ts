@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { FoldShape, foldPoint } from '../core/fold';
 import { hash3 } from '../core/rng';
 import type { ChunkData } from './generator';
-import { treeDepthMaterial, treeMaterial, U } from './materials';
+import { treeDepthMaterial, treeMaterial, treePrepassMaterial, U } from './materials';
 import { leafTexture, treeGeometry } from './trees';
 
 /** What the trees need to know about a streamed chunk. */
@@ -25,11 +25,17 @@ export const TREE_FADE = 12;
 const NEAR_MARGIN = 8;
 /** Floats per tree: x, z, yaw, scale, tone, birth time, seed, shape * 2 + mirrored. */
 const STRIDE = 8;
+/** The far list is put back in order, nearest first, once the eye has moved this far (metres) since it last was. */
+const RESORT = 32;
 
-/** One instanced mesh drawing a compact list of trees (no empty slots: every instance drawn is a tree). */
+/**
+ * One instanced mesh drawing a compact list of trees (no empty slots: every instance drawn is a tree), and its
+ * depth pass (`pre`, drawn first: see treePrepassMaterial).
+ */
 class TreeList {
   readonly geometry = new THREE.InstancedBufferGeometry();
   readonly mesh: THREE.Mesh;
+  readonly pre: THREE.Mesh;
   private readonly iTree: THREE.InstancedBufferAttribute;
   private readonly iLook: THREE.InstancedBufferAttribute;
 
@@ -38,6 +44,7 @@ class TreeList {
     readonly cap: number,
     material: THREE.Material,
     depth: THREE.Material,
+    prepass: THREE.Material,
   ) {
     this.geometry.setIndex(base.index);
     for (const [name, attr] of Object.entries(base.attributes)) this.geometry.setAttribute(name, attr);
@@ -52,6 +59,8 @@ class TreeList {
     this.mesh.receiveShadow = true;
     // folding happens on the GPU, so CPU-side bounds mean nothing
     this.mesh.frustumCulled = false;
+    this.pre = new THREE.Mesh(this.geometry, prepass);
+    this.pre.frustumCulled = false;
   }
 
   get count(): number {
@@ -90,6 +99,8 @@ export class TreeField {
   readonly far: TreeList;
   /** Where the near version has faded out, metres from the eye (0: far version only, as on Low). */
   nearDist = 60;
+  /** How far from the eye the trees cast shadows, metres. */
+  shadowDist = 180;
   /** Resolves when the leaves have been drawn (just after the first frame). */
   ready: Promise<void>;
 
@@ -102,13 +113,19 @@ export class TreeField {
   private lastNear = new Int32Array(NEAR_CAP).fill(-1);
   private lastNearCount = -1;
   private p = new THREE.Vector3();
+  /** Where the eye was when the far list was last put in order (NaN: never). */
+  private sortedAt = new THREE.Vector3(NaN, 0, 0);
 
   constructor() {
-    this.near = new TreeList(treeGeometry('near'), NEAR_CAP, treeMaterial('near'), treeDepthMaterial('near'));
-    this.far = new TreeList(treeGeometry('far'), FAR_CAP, treeMaterial('far'), treeDepthMaterial('far'));
-    // The near trees are drawn before the city: where their leaves cover a facade, its shading is skipped.
+    this.near = new TreeList(treeGeometry('near'), NEAR_CAP, treeMaterial('near'), treeDepthMaterial('near'), treePrepassMaterial('near'));
+    this.far = new TreeList(treeGeometry('far'), FAR_CAP, treeMaterial('far'), treeDepthMaterial('far'), treePrepassMaterial('far'));
+    // The trees' depth goes in first, near then far, then their colour, then the city's: where leaves cover a
+    // facade or another leaf, the GPU skips shading what is behind.
+    this.near.pre.renderOrder = -3;
+    this.far.pre.renderOrder = -2;
     this.near.mesh.renderOrder = -1;
-    this.group.add(this.near.mesh, this.far.mesh);
+    this.far.mesh.renderOrder = -1;
+    this.group.add(this.near.pre, this.far.pre, this.near.mesh, this.far.mesh);
     // the leaves are drawn texel by texel; leave that until the first frame is on the screen
     this.ready = new Promise((done) =>
       setTimeout(() => {
@@ -116,6 +133,17 @@ export class TreeField {
         done();
       }, 0),
     );
+  }
+
+  /**
+   * With the depth pass (the default) or without it, when the colour pass writes its own depth as other meshes
+   * do; the bench switches it off to measure what it saves.
+   */
+  setPrepass(on: boolean): void {
+    for (const list of [this.near, this.far]) {
+      list.pre.visible = on;
+      (list.mesh.material as THREE.Material).depthWrite = !on;
+    }
   }
 
   /** A chunk's street furniture came or went: rebuild the list of trees. */
@@ -130,7 +158,11 @@ export class TreeField {
     // (with no near version, both ends sit behind the eye so every tree is far)
     U.uTrees.value.x = end > 0 ? end - TREE_FADE : -2;
     U.uTrees.value.y = end > 0 ? end : -1;
+    U.uTreeShadow.value.set(this.shadowDist * 0.8, this.shadowDist);
     if (this.dirty) this.collect(chunks);
+    // Nearest first, in both lists: a leaf that is drawn first hides the ones behind it from the GPU, which then
+    // skips them (the crowns are many layers of cards deep, and drawing them is most of what the trees cost).
+    if (!(this.sortedAt.distanceToSquared(eye) < RESORT * RESORT)) this.sortFar(folds, eye);
 
     let n = 0;
     if (end > 0) {
@@ -146,14 +178,10 @@ export class TreeField {
           this.nearDist2[n++] = d2;
         }
       }
-      if (n > NEAR_CAP) {
-        // the nearest ones, if there are too many
-        const idx = Array.from({ length: n }, (_, k) => k).sort((a, b) => this.nearDist2[a] - this.nearDist2[b]);
-        for (let k = 0; k < NEAR_CAP; k++) this.order[k] = this.rows[idx[k]];
-        n = NEAR_CAP;
-      } else {
-        this.order.set(this.rows.subarray(0, n));
-      }
+      // the nearest first (and only the nearest, if there are too many)
+      const idx = Array.from({ length: n }, (_, k) => k).sort((a, b) => this.nearDist2[a] - this.nearDist2[b]);
+      n = Math.min(n, NEAR_CAP);
+      for (let k = 0; k < n; k++) this.order[k] = this.rows[idx[k]];
     }
     let same = n === this.lastNearCount;
     for (let k = 0; same && k < n; k++) same = this.order[k] === this.lastNear[k];
@@ -186,11 +214,24 @@ export class TreeField {
       });
     }
     this.total = n;
-    const rows = new Int32Array(n);
-    for (let i = 0; i < n; i++) rows[i] = i;
-    this.far.write(this.all, rows, n);
+    this.sortedAt.set(NaN, 0, 0);
     // the rows behind the near list have moved
     this.lastNearCount = -1;
+  }
+
+  /** Write the far list again, nearest the eye first. */
+  private sortFar(folds: readonly FoldShape[], eye: THREE.Vector3): void {
+    this.sortedAt.copy(eye);
+    const n = this.total;
+    const d2 = new Float32Array(n);
+    const p = this.p;
+    for (let i = 0; i < n; i++) {
+      p.set(this.all[i * STRIDE], 0, this.all[i * STRIDE + 1]);
+      if (folds.length) foldPoint(folds, p.x, p.z, p);
+      d2[i] = p.distanceToSquared(eye);
+    }
+    const rows = Array.from({ length: n }, (_, k) => k).sort((a, b) => d2[a] - d2[b]);
+    this.far.write(this.all, rows, n);
   }
 
   /** How many trees each version is drawing now. */

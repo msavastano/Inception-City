@@ -46,6 +46,10 @@ export const SHAPES: readonly TreeShape[] = [
   { fork: 3.4, centre: [0, 9.2, 0], radii: [6.0, 5.6, 6.0], floor: 3.6, back: -Infinity, limbs: 5, turn: 0.4 },
 ];
 
+/** Leaf cards in each shape's near and far versions. */
+const NEAR_CARDS = [470, 560];
+const FAR_CARDS = [44, 54];
+
 /** The leaf atlas: 2 x 2 cells. The first row holds the near cards' clusters, the second the far cards' denser ones. */
 export const ATLAS_SIZE = 512;
 const CELL = ATLAS_SIZE / 2;
@@ -317,7 +321,7 @@ function leafSpots(cls: number, seed: number, sk: Skeleton): { p: V3; limb: numb
   // a few broad bulges and hollows in the crown's outline
   const bumps = Array.from({ length: 5 }, () => ({ d: randUnit(rand), k: 0.1 + rand() * 0.1 }));
   const lump = (u: V3) => 0.84 + bumps.reduce((sum, b) => sum + b.k * Math.max(0, dot(u, b.d)) ** 3, 0);
-  const total = cls === TREE_CLASS.boulevard ? 470 : 560;
+  const total = NEAR_CARDS[cls];
   const spots: { p: V3; limb: number }[] = [];
   for (let k = 0; spots.length < total; k++) {
     if (k % 3 === 0) {
@@ -432,7 +436,7 @@ function farTree(b: Builder, cls: number, seed: number): void {
   const limbOf = (p: V3) => spots.reduce((best, c) => (len(sub(c.p, p)) < len(sub(best.p, p)) ? c : best)).limb;
   for (const g of gather(
     spots.map((c) => c.p),
-    cls === TREE_CLASS.boulevard ? 44 : 54,
+    FAR_CARDS[cls],
   )) {
     const q = inside(s, g.c, 0.97, 0.9);
     const size = clamp(2.2 + 1.5 * g.spread, 2.6, 4.0);

@@ -22,6 +22,8 @@
 // --repeat 3 loads each view three times and reports the middle time and the spread.
 // --settle 3000 starts every view 3 s after its page opened, whatever the build had to load first,
 // which keeps a build that loads more (and so starts later) comparable with one that loads less.
+// --parts trees,near-trees,far-trees,near-tree-shadows,far-tree-shadows,tree-prepass (with --time) then times the same
+// frame with each of those left out in turn, in the same page, and reports how much each one costs.
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -138,6 +140,7 @@ function args() {
     time: a.includes('--time'),
     repeat: Math.max(1, Number(get('repeat', '1')) || 1),
     settle: Math.max(0, Number(get('settle', '0')) || 0),
+    parts: get('parts', '') ? get('parts', '').split(',') : [],
     gpu: a.includes('--gpu'),
     channel: get('channel', ''),
     compare: compare >= 0 ? [resolve(a[compare + 1]), resolve(a[compare + 2])] : null,
@@ -170,7 +173,7 @@ function serve(dir) {
 }
 
 /** Runs in the page: set the view up, fast-forward until the city has streamed in, draw one frame. */
-async function shoot([v, time, settle]) {
+async function shoot([v, time, settle, parts]) {
   const d = window.dream;
   // wait for anything still loading (the hallway's model and the surface detail; builds before them have none)
   await d.hallway.ready;
@@ -274,6 +277,42 @@ async function shoot([v, time, settle]) {
     const t0 = performance.now();
     for (let i = 0; i < 40; i++) draw();
     out.stats.ms = Math.round(((performance.now() - t0) / 40) * 100) / 100;
+    if (parts.length) {
+      // What each part costs: the same frame with that part left out, in turn, three rounds, all in this one page
+      // load (a page load moves the frame time more than a part may cost). Each is reported as the time saved.
+      const t = d.streamer.trees;
+      const PARTS = {
+        trees: [() => [t.group], 'visible'],
+        'near-trees': [() => [t.near.mesh, t.near.pre], 'visible'],
+        'far-trees': [() => [t.far.mesh, t.far.pre], 'visible'],
+        'near-tree-shadows': [() => [t.near.mesh], 'castShadow'],
+        'far-tree-shadows': [() => [t.far.mesh], 'castShadow'],
+        // (without the depth pass, the trees' colour writes depth itself)
+        'tree-prepass': [() => [{ set visible(on) { t.setPrepass(on); } }], 'visible'],
+      };
+      const time20 = () => {
+        for (let i = 0; i < 3; i++) draw();
+        const t = performance.now();
+        for (let i = 0; i < 20; i++) draw();
+        return (performance.now() - t) / 20;
+      };
+      const runs = Object.fromEntries(['all', ...parts].map((k) => [k, []]));
+      for (let r = 0; r < 3; r++) {
+        runs.all.push(time20());
+        for (const k of parts) {
+          const [get, key] = PARTS[k] ?? [];
+          const objs = (get?.() ?? []).filter(Boolean);
+          if (!objs.length) continue;
+          for (const obj of objs) obj[key] = false;
+          runs[k].push(time20());
+          for (const obj of objs) obj[key] = true;
+        }
+      }
+      const mid = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)];
+      const all = mid(runs.all);
+      out.stats.parts = Object.fromEntries(parts.map((k) => [k, runs[k].length ? Math.round((all - mid(runs[k])) * 100) / 100 : null]));
+      out.stats.partsBase = Math.round(all * 100) / 100;
+    }
   }
   return out;
 }
@@ -326,7 +365,7 @@ async function run(o) {
       const hash = `s=${SEED}&q=${tier}&l=${v.level}${v.time !== undefined ? `&t=${v.time}` : ''}${o.hash ? `&${o.hash}` : ''}`;
       await page.goto(`${base}#${hash}`);
       await page.waitForFunction(() => window.dream, null, { timeout: 120000 });
-      return await page.evaluate(shoot, [v, o.time, o.settle]);
+      return await page.evaluate(shoot, [v, o.time, o.settle, o.parts]);
     } finally {
       await context.close().catch(() => {});
     }
@@ -364,6 +403,7 @@ async function run(o) {
           `${stats.ms !== undefined ? `${stats.ms.toFixed(2).padStart(7)} ms a frame  ` : ''}` +
           `${stats.runs ? `(${stats.runs.map((t) => t.toFixed(1)).join(' / ')})  ` : ''}(${((Date.now() - t0) / 1000).toFixed(0)} s)`,
       );
+      if (stats.parts) console.log(`  ${Object.entries(stats.parts).map(([k, ms]) => `${k} ${ms === null ? '-' : `${ms.toFixed(2)} ms`}`).join(', ')}  (of ${stats.partsBase} ms)`);
     }
   }
   await browser.close();

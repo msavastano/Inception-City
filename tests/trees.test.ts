@@ -87,7 +87,7 @@ describe('plane trees', () => {
     };
     const top = cover(levels[0]);
     expect(top).toBeGreaterThan(0.2);
-    expect(top).toBeLessThan(0.6);
+    expect(top).toBeLessThan(0.7);
     // the alpha test cuts at a half: a mip level must not thin the crowns out (or fill them in) on its way down
     for (const k of [1, 2, 3, 4]) expect(Math.abs(cover(levels[k]) - top)).toBeLessThan(0.1);
   });

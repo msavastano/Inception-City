@@ -37,11 +37,12 @@ const PUBLIC_URL = 'https://msavastano.github.io/Inception-City/';
 // detail: how far away (metres) the scanned surface detail has faded out (0 = none: the surfaces are painted only)
 // trees: how far away (metres) a tree has finished turning from its near version (every branch and leaf card) to
 //   its far one (trunk, limbs and a few big cards); 0 = far version only
-const QUALITY: Record<QualityName, { pr: number; shadow: number; extent: number; bloom: boolean; view: number; props: number; chunks: number; crowd: number; mirror: number; shards: number; relief: number; detail: number; trees: number }> = {
-  ultra: { pr: 2, shadow: 4096, extent: 460, bloom: true, view: 1300, props: 650, chunks: 150, crowd: 900, mirror: 0.5, shards: 7000, relief: 64, detail: 56, trees: 100 },
-  high: { pr: 1.5, shadow: 2048, extent: 380, bloom: true, view: 1050, props: 480, chunks: 120, crowd: 600, mirror: 0.5, shards: 5000, relief: 48, detail: 46, trees: 80 },
-  medium: { pr: 1, shadow: 2048, extent: 320, bloom: true, view: 820, props: 360, chunks: 90, crowd: 400, mirror: 0.35, shards: 3200, relief: 38, detail: 36, trees: 60 },
-  low: { pr: 0.75, shadow: 0, extent: 260, bloom: false, view: 620, props: 240, chunks: 60, crowd: 180, mirror: 0, shards: 1600, relief: 0, detail: 0, trees: 0 },
+// treeShadows: how far away (metres) trees still cast shadows (beyond, the ground paints their shade)
+const QUALITY: Record<QualityName, { pr: number; shadow: number; extent: number; bloom: boolean; view: number; props: number; chunks: number; crowd: number; mirror: number; shards: number; relief: number; detail: number; trees: number; treeShadows: number }> = {
+  ultra: { pr: 2, shadow: 4096, extent: 460, bloom: true, view: 1300, props: 650, chunks: 150, crowd: 900, mirror: 0.5, shards: 7000, relief: 64, detail: 56, trees: 100, treeShadows: 300 },
+  high: { pr: 1.5, shadow: 2048, extent: 380, bloom: true, view: 1050, props: 480, chunks: 120, crowd: 600, mirror: 0.5, shards: 5000, relief: 48, detail: 46, trees: 80, treeShadows: 240 },
+  medium: { pr: 1, shadow: 2048, extent: 320, bloom: true, view: 820, props: 360, chunks: 90, crowd: 400, mirror: 0.35, shards: 3200, relief: 38, detail: 36, trees: 60, treeShadows: 180 },
+  low: { pr: 0.75, shadow: 0, extent: 260, bloom: false, view: 620, props: 240, chunks: 60, crowd: 180, mirror: 0, shards: 1600, relief: 0, detail: 0, trees: 0, treeShadows: 0 },
 };
 /** Instability at which the dream collapses (the HUD reads 0% stability). */
 const COLLAPSE_AT = 0.995;
@@ -1062,6 +1063,7 @@ export class App implements DreamContext {
     if (detail) this.detailReady = loadSurfaceDetail(Math.min(4, this.renderer.capabilities.getMaxAnisotropy()));
     this.streamer.limit = q.chunks;
     this.streamer.trees.nearDist = q.trees * LOOK.trees;
+    this.streamer.trees.shadowDist = q.treeShadows;
     // the modelled hallway on every tier but Low, which keeps the painted box (and its cost)
     this.hallway.useModel(name !== 'low' && LOOK.hall > 0);
     this.audio.setSpatial(name !== 'low');

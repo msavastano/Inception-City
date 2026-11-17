@@ -332,6 +332,21 @@ Before and after, from the bench (Medium, the same seed and view):
 
 ![The Haussmann front at midnight, before and after](images/walls-with-depth/facade-night-medium.jpg)
 
+### 5.12 The hallway, built in Blender
+
+The rotating hallway (4.3) was a painted box: four flat walls whose carpet, panelling, doors and lamps were all painted by its shader. It is mostly seen up close and turned on its side, which is where paint gives itself away. On Medium and High it is now a modelled hotel corridor with its light baked in, and the painted box stays as the fallback.
+
+- **Made from numbers.** `art/hallway/build_hallway.py` builds the corridor in Blender: a skirting, a chair rail and raised wood panels below it, picture-frame mouldings and a picture rail above, a coved cornice, panelled doors set 12 cm back into their walls with architraves, kick plates, knobs and number plates, sconces with half-drum shades, a coffered ceiling with a glass light in each coffer, and the chamfered stone outside with its section rings and the bands round the open ends. Nothing is downloaded. It runs in Blender 5.3, or in a plain Python with the `bpy` module, so it needs no Blender installed and no screen. `scripts/pack-hallway.mjs` runs it and compresses the result.
+- **The light is baked.** Cycles bakes the light of the fourteen sconces (their shades glow, and each throws a scallop up the wall and a pool down it) and the seven ceiling lights, with five diffuse bounces, into one 1024 × 1024 lightmap on the model's only UV set. The corridor is symmetric across its middle both ways, so only a quarter of it is in the file, and it is baked with its three mirror images standing beside it so that every lamp in the corridor lights it. The game mirrors the quarter back into the whole corridor. A quarter's lightmap at 1024 is as sharp as the whole corridor's would be at 2048.
+- **Light, not paint, in the lightmap.** Each vertex carries its base colour and its kind of surface (carpet, wallpaper, wood, door, trim, plaster, brass, shade, glass, and three kinds of stone outside). The game's shader multiplies the bake by the surface's own pattern at full resolution: the carpet's lattice and border, the wallpaper's satin stripes and damask, walnut and mahogany grain, and the room numbers on the brass plates. The lightmap is light only, so it is smooth and compresses to almost nothing.
+- **Inside baked, outside sunlit.** The inside skips three.js's light loop and takes its light from the bake, which turns with the corridor because it is part of it. The stone outside is lit by the sun and the sky like the rest of the city. A little of the sky's light comes in at the open ends and is gone a few metres in.
+- **What did not change.** The rider's physics is the same analytic box: its walked-on planes are at ±3.5 m exactly, and nothing in the model stands into that box by more than 8 cm (doors, coffers and lamps are set back into the walls instead), so nothing catches the feet or the third-person camera. The corridor stays rigid at the fold of its centre, its footsteps are the same carpet and panelling, and on Low, or with `#hall=0`, the painted box is drawn exactly as before.
+- **What it costs.** The file is about 80 kB (meshopt geometry, WebP lightmap), loaded just after the first frame with three's GLTFLoader and meshopt decoder, which add about 30 kB gzipped to the game. The painted box draws until it arrives and if it cannot be read. It is still one draw call, about 13,000 triangles for the whole corridor. TIMING_HERE
+
+Before and after, from the bench (Medium, the same seed and view):
+
+SHOTS_HERE
+
 ## 6. Scaling
 
 The goal is a city that is effectively infinite, foldable in real time, and still smooth on a phone. Each of the decisions below exists to keep one cost constant as the city grows.
@@ -420,8 +435,11 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 ### Milestone 1.8: sound (done)
 - Recorded air for each level and the hallway, footsteps that follow the surface and the weather, a crowd that murmurs from where it stands, and the heist's kick and sleep machine placed around the head, all from CC0 recordings under a megabyte, with a listening bench for judging changes like these (5.10)
 
-### Milestone 1.9: walls with depth (this release)
+### Milestone 1.9: walls with depth (done)
 - Windows set back in their walls with lit and shaded reveals, frames and glazing bars; cornices, string courses, balconies, awnings and sills that shade the wall under them; carved joints in stone, brick and concrete. All in the facade painter, with no new geometry (5.11)
+
+### Milestone 1.10: the hallway, built in Blender (this release)
+- The rotating hallway as a modelled hotel corridor (wainscot, mouldings, panelled doors with their numbers, sconces, a coffered ceiling, carpet and wallpaper) with its lamps' light baked in Cycles, in an 80 kB file, built from a script with nothing downloaded (5.12)
 
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
@@ -453,8 +471,10 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/city/streamer.ts` | World-space streaming, LOD, collision and raise-brush edits |
 | `src/world/` | Sky, sun and weather, dream levels, the projections crowd |
 | `src/world/atmosphere.ts` | The sky's colour function and the haze that replaces fog in every folded material |
-| `src/world/look.ts` | The dials for the look (tone curve, ambient occlusion, haze, glow, wall relief) and their link parameters |
-| `src/world/hallway.ts` | The rotating hallway: geometry, shader painter and the rider's physics |
+| `src/world/look.ts` | The dials for the look (tone curve, ambient occlusion, haze, glow, wall relief, the modelled hallway) and their link parameters |
+| `src/world/hallway.ts` | The rotating hallway: the painted box, the rider's physics, and which corridor is drawn |
+| `src/world/hallwayModel.ts`, `src/world/hallway/` | The corridor modelled and baked in Blender: loading, mirroring the quarter, and its painter |
+| `art/hallway/build_hallway.py`, `scripts/pack-hallway.mjs` | Builds, lights and bakes the corridor in Blender, then compresses it into `src/world/hallway/` |
 | `src/world/collapse.ts` | The café explosion: the shard planner, the slow-motion timeline and the automatic kick |
 | `src/world/dreamer.ts` | The dreamer's body for the third-person view: which clips to mix, the stride clock, the head turn |
 | `src/world/projections.ts` | The crowd's behaviour: walking the sidewalks, standing, staring, hunting, and which clip each one is in |

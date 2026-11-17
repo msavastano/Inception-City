@@ -1046,6 +1046,8 @@ export class App implements DreamContext {
     setWallRelief(q.relief > 0 && LOOK.relief > 0);
     U.uRelief.value.set(Math.min(LOOK.relief, 2), Math.min(LOOK.relief, 1.5), q.relief * 0.7, q.relief);
     this.streamer.limit = q.chunks;
+    // the modelled hallway on every tier but Low, which keeps the painted box (and its cost)
+    this.hallway.useModel(name !== 'low' && LOOK.hall > 0);
     this.audio.setSpatial(name !== 'low');
     const sun = this.env.sun;
     sun.castShadow = q.shadow > 0;
@@ -1118,6 +1120,7 @@ export class App implements DreamContext {
     }
 
     this.hallway.update(dt, this.time, this.folds.active);
+    this.hallway.outdoor.copy(this.env.hemi.color).multiplyScalar(this.env.hemi.intensity);
 
     if (!this.started) {
       const a = this.time * 0.05;

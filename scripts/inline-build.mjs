@@ -13,10 +13,11 @@ const read = (href) => readFileSync(join(dist, href.replace(/^\.?\//, '')), 'utf
 html = html.replace(/<link rel="stylesheet"[^>]*href="([^"]+)"[^>]*>/g, (_, href) => `<style>\n${read(href)}\n</style>`);
 html = html.replace(/<script type="module"[^>]*src="([^"]+)"[^>]*><\/script>/g, (_, src) => {
   let js = read(src).replace(/<\/script/gi, '<\\/script');
-  // recorded sounds sit beside the script as files: carry them inside it instead
-  js = js.replace(/new URL\(([`'"])([^`'"]+\.opus)\1,\s*import\.meta\.url\)\.href/g, (_m, _q, file) => {
+  // recorded sounds and the hallway's model sit beside the script as files: carry them inside it instead
+  const TYPES = { opus: 'audio/ogg', glb: 'model/gltf-binary' };
+  js = js.replace(/new URL\(([`'"])([^`'"]+\.(opus|glb))\1,\s*import\.meta\.url\)\.href/g, (_m, _q, file, ext) => {
     const data = readFileSync(join(dist, dirname(src), file)).toString('base64');
-    return JSON.stringify(`data:audio/ogg;base64,${data}`);
+    return JSON.stringify(`data:${TYPES[ext]};base64,${data}`);
   });
   return `<script type="module">\n${js}\n</script>`;
 });

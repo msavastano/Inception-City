@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { foldPoint, FoldShape } from '../core/fold';
+import { loadHallwayModel, modelMaterial } from './hallwayModel';
 
 /**
  * THE ROTATING HALLWAY
@@ -31,6 +32,8 @@ const FRICTION = 0.6;
 const SLIDE_FRICTION = 0.3;
 const EYE = 1.6;
 const SKIN = 0.05;
+/** Brightness of the baked light in the game (1 is the light as Blender baked it). */
+const BAKED_LIGHT = 2.4;
 
 /** Inward wall normals in spin space: floor, +x wall, ceiling, -x wall. */
 const FACE_N: [number, number][] = [
@@ -192,7 +195,20 @@ export class Hallway {
     uReveal: { value: 0 },
     uRevealZ: { value: 0 },
     uHallTime: { value: 0 },
+    uBake: { value: null as THREE.Texture | null },
+    uBakeGain: { value: 1 },
+    uHallSky: { value: new THREE.Color(0, 0, 0) },
   };
+  /** The light of the sky outside (set every frame by the app): it reaches a few metres in at the open ends. */
+  readonly outdoor = this.uniforms.uHallSky.value;
+  /** The painted box: drawn until the modelled corridor has loaded, and on Low quality. */
+  private readonly painted: { geometry: THREE.BufferGeometry; material: THREE.Material };
+  private model: { geometry: THREE.BufferGeometry; material: THREE.Material } | null = null;
+  private wantModel = false;
+  /** Where the modelled corridor is: not asked for yet, on its way, in, or failed to load (the painted box stays). */
+  modelState: 'none' | 'loading' | 'ready' | 'failed' = 'none';
+  /** Settles once the modelled corridor has loaded or failed (at once if it was never asked for). */
+  ready: Promise<void> = Promise.resolve();
   private readonly gB = new THREE.Vector3(0, -GRAVITY, 0);
   private readonly bx = new THREE.Vector3();
   private readonly by = new THREE.Vector3();
@@ -200,11 +216,50 @@ export class Hallway {
   private readonly spinM = new THREE.Matrix4();
 
   constructor() {
-    this.mesh = new THREE.Mesh(corridorGeometry(), corridorMaterial(this.uniforms));
+    this.painted = { geometry: corridorGeometry(), material: corridorMaterial(this.uniforms) };
+    this.mesh = new THREE.Mesh(this.painted.geometry, this.painted.material);
     this.mesh.matrixAutoUpdate = false;
     this.mesh.castShadow = true;
     this.mesh.frustumCulled = false;
     this.mesh.visible = false;
+  }
+
+  /**
+   * Draw the modelled corridor (true) or the painted box (false). The model is fetched the
+   * first time it is asked for, a moment after the call so the first frame is not held up;
+   * the painted box stands in until it arrives, and for good if it cannot be loaded.
+   */
+  useModel(on: boolean): void {
+    this.wantModel = on;
+    if (on && this.modelState === 'none') {
+      this.modelState = 'loading';
+      this.ready = new Promise<void>((done) => {
+        setTimeout(() => {
+          loadHallwayModel()
+            .then((m) => {
+              this.uniforms.uBake.value = m.light;
+              this.uniforms.uBakeGain.value = m.scale * BAKED_LIGHT;
+              this.model = { geometry: m.geometry, material: modelMaterial(this.uniforms) };
+              this.modelState = 'ready';
+            })
+            .catch((e) => {
+              console.warn('The modelled hallway did not load; keeping the painted one.', e);
+              this.modelState = 'failed';
+            })
+            .finally(() => {
+              this.showModel();
+              done();
+            });
+        }, 50);
+      });
+    }
+    this.showModel();
+  }
+
+  private showModel(): void {
+    const use = this.wantModel && this.model ? this.model : this.painted;
+    this.mesh.geometry = use.geometry;
+    this.mesh.material = use.material;
   }
 
   /** Axis and across directions in fabric (x, z) for a corridor along x or z. Across is up × axis. */

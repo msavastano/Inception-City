@@ -69,7 +69,8 @@ export interface Quarter {
  * The whole corridor from its quarter at x >= 0, z >= 0: the quarter and its mirror images
  * across x = 0 and z = 0. The images keep the quarter's lightmap coordinates (the light is
  * symmetric too), and the ones mirrored once have their triangles turned round so they still
- * face the right way.
+ * face the right way. The inside's triangles come first, as group 0, and the stone outside's
+ * after them, as group 1: they are drawn with different materials.
  *
  * Vertices within SEAM of a mirror plane are put on it: the file's positions are quantised, and
  * miss x = 0 by most of a millimetre, which would open a crack down the middle of the corridor.
@@ -92,6 +93,7 @@ export function mirrorQuarter(q: Quarter): THREE.BufferGeometry {
   const tint = new Float32Array(n * 12);
   const kind = new Float32Array(n * 4);
   const index = new Uint32Array(m * 4);
+  let insideCount = 0;
   mirrors.forEach(([sx, sz], k) => {
     const o = k * n;
     for (let i = 0; i < n; i++) {
@@ -109,14 +111,23 @@ export function mirrorQuarter(q: Quarter): THREE.BufferGeometry {
       tint[a + 2] = q.color[i * 4 + 2];
       kind[o + i] = Math.round(q.color[i * 4 + 3] * 16);
     }
-    const flip = sx * sz < 0;
-    for (let t = 0; t < m; t += 3) {
-      const b = k * m + t;
-      index[b] = q.index[t] + o;
-      index[b + 1] = q.index[flip ? t + 2 : t + 1] + o;
-      index[b + 2] = q.index[flip ? t + 1 : t + 2] + o;
-    }
   });
+  // the triangles, inside ones first: the inside and the outside are drawn with different materials
+  let b = 0;
+  const inside = (t: number) => Math.round(q.color[q.index[t] * 4 + 3] * 16) < OUTSIDE_FROM;
+  for (const pass of [true, false]) {
+    mirrors.forEach(([sx, sz], k) => {
+      const o = k * n;
+      const flip = sx * sz < 0;
+      for (let t = 0; t < m; t += 3) {
+        if (inside(t) !== pass) continue;
+        index[b++] = q.index[t] + o;
+        index[b++] = q.index[flip ? t + 2 : t + 1] + o;
+        index[b++] = q.index[flip ? t + 1 : t + 2] + o;
+      }
+    });
+    if (pass) insideCount = b;
+  }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(position, 3));
   g.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
@@ -124,6 +135,8 @@ export function mirrorQuarter(q: Quarter): THREE.BufferGeometry {
   g.setAttribute('aTint', new THREE.BufferAttribute(tint, 3));
   g.setAttribute('aKind', new THREE.BufferAttribute(kind, 1));
   g.setIndex(new THREE.BufferAttribute(index, 1));
+  g.addGroup(0, insideCount, 0);
+  g.addGroup(insideCount, index.length - insideCount, 1);
   g.computeBoundingSphere();
   return g;
 }
@@ -183,6 +196,16 @@ uniform sampler2D uBake;
 uniform float uBakeGain;
 uniform vec3 uHallSky;
 
+// How far the corridor's coordinates move across one pixel, taken once before any branch on the
+// kind of surface. A derivative inside such a branch can make a compiler run every branch for
+// every pixel (Direct3D's does), so the lines below are anti-aliased with these instead.
+vec3 hmDx;
+vec3 hmDy;
+// the screen footprint of something that changes by g per metre of the corridor
+float hmFw(vec3 g) { return abs(dot(g, hmDx)) + abs(dot(g, hmDy)); }
+// the same when the direction of the change is not known: an upper bound
+float hmFwAbs(vec3 g) { return dot(g, abs(hmDx)) + dot(g, abs(hmDy)); }
+
 float hmHash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float hmNoise(vec2 p) {
   vec2 i = floor(p);
@@ -190,20 +213,17 @@ float hmNoise(vec2 p) {
   f = f * f * (3.0 - 2.0 * f);
   return mix(mix(hmHash(i), hmHash(i + vec2(1.0, 0.0)), f.x), mix(hmHash(i + vec2(0.0, 1.0)), hmHash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
-// a line of half-width w at v == 0, anti-aliased by its own screen footprint
-float hmLine(float v, float w) {
-  float aa = fwidth(v) * 0.75 + 1e-5;
+// a line of half-width w at v == 0, anti-aliased over fw, its screen footprint
+float hmLine(float v, float w, float fw) {
+  float aa = fw * 0.75 + 1e-5;
   return 1.0 - smoothstep(w - aa, w + aa, abs(v));
 }
-float hmBand(float v, float a, float b) {
-  float aa = fwidth(v) * 0.75 + 1e-5;
+float hmBand(float v, float a, float b, float fw) {
+  float aa = fw * 0.75 + 1e-5;
   return smoothstep(a - aa, a + aa, v) * (1.0 - smoothstep(b - aa, b + aa, v));
 }
 // 3 x 5 digits for the room numbers, rows top to bottom, three bits a row
-int hmDigit(int d) {
-  int t[10] = int[10](31599, 11415, 29671, 29391, 23497, 31183, 31215, 29266, 31727, 31695);
-  return t[d];
-}
+const int HM_DIGITS[10] = int[10](31599, 11415, 29671, 29391, 23497, 31183, 31215, 29266, 31727, 31695);
 float hmNumber(vec2 q, int n) {
   // q: metres from the middle of the plate, x along the reading direction, y up
   const float CELL = 0.018;
@@ -216,11 +236,13 @@ float hmNumber(vec2 q, int n) {
   int col = int(floor(cx));
   int row = int(floor(y / CELL));
   int d = i == 0 ? n / 100 : (i == 1 ? (n / 10) % 10 : n % 10);
-  return float((hmDigit(d) >> (14 - row * 3 - col)) & 1);
+  return float((HM_DIGITS[d] >> (14 - row * 3 - col)) & 1);
 }
 
-// The corridor's surfaces: base colour (and glow for the lamps) from the kind and the place.
-vec3 hallModelPaint(out vec3 glow) {
+// The inside: base colour (and glow for the lamps) from the kind of surface and the place.
+vec3 hallInsidePaint(out vec3 glow) {
+  hmDx = dFdx(vHall);
+  hmDy = dFdy(vHall);
   vec3 p = vHall;
   vec3 c = vTint;
   float k = floor(vKind + 0.5);
@@ -232,13 +254,15 @@ vec3 hallModelPaint(out vec3 glow) {
     vec2 q = vec2(p.x, p.z) / vec2(0.85, 0.9);
     vec2 d = abs(fract(q) - 0.5);
     float lat = d.x + d.y;
-    float motif = hmLine(lat - 0.36, 0.035) + hmLine(length(d) - 0.0, 0.07) * 0.8 + hmLine(lat - 0.18, 0.02) * 0.6;
+    float fLat = hmFwAbs(vec3(1.0 / 0.85, 0.0, 1.0 / 0.9));
+    float motif = hmLine(lat - 0.36, 0.035, fLat) + hmLine(length(d), 0.07, fLat * 0.71) * 0.8 + hmLine(lat - 0.18, 0.02, fLat) * 0.6;
     vec3 gold = vec3(0.42, 0.27, 0.085);
     vec3 dark = vec3(0.07, 0.012, 0.012);
     vec3 field = mix(c, gold, clamp(motif, 0.0, 1.0) * step(ax, 2.5));
-    float border = hmBand(ax, 2.62, 2.92);
+    float fAx = hmFw(vec3(1.0, 0.0, 0.0));
+    float border = hmBand(ax, 2.62, 2.92, fAx);
     field = mix(field, gold * 0.9, border);
-    field = mix(field, dark, hmLine(ax - 2.56, 0.018) + hmLine(ax - 2.98, 0.018));
+    field = mix(field, dark, hmLine(ax - 2.56, 0.018, fAx) + hmLine(ax - 2.98, 0.018, fAx));
     field = mix(field, c * 0.8, step(3.02, ax));
     float pile = 0.9 + 0.12 * hmNoise(p.xz * 9.0) + 0.06 * hmNoise(p.xz * 37.0);
     c = field * pile;
@@ -246,9 +270,11 @@ vec3 hallModelPaint(out vec3 glow) {
     // wallpaper: satin stripes with a small damask motif in the wide ones
     float s = p.z / 0.42;
     float st = fract(s);
-    float wide = hmBand(st, 0.08, 0.62);
+    float wide = hmBand(st, 0.08, 0.62, hmFw(vec3(0.0, 0.0, 1.0 / 0.42)));
     vec2 cell = vec2(fract(s) - 0.35, fract(p.y / 0.56) - 0.5);
-    float med = hmLine(length(cell * vec2(2.4, 1.0)) - 0.2, 0.018) + hmLine(length(cell * vec2(5.0, 2.2)) - 0.0, 0.08);
+    float f1 = hmFwAbs(vec3(0.0, 1.0 / 0.56, 2.4 / 0.42)) * 0.71;
+    float f2 = hmFwAbs(vec3(0.0, 2.2 / 0.56, 5.0 / 0.42)) * 0.71;
+    float med = hmLine(length(cell * vec2(2.4, 1.0)) - 0.2, 0.018, f1) + hmLine(length(cell * vec2(5.0, 2.2)), 0.08, f2);
     c *= 0.92 + 0.1 * wide + 0.07 * clamp(med, 0.0, 1.0) * wide;
     c *= 0.96 + 0.06 * hmNoise(vec2(p.z, p.y) * 13.0);
   } else if (k == 3.0) {
@@ -274,80 +300,108 @@ vec3 hallModelPaint(out vec3 glow) {
   } else if (k == 8.0) {
     // a sconce's shade: glowing cloth with brass rims
     float t = p.y + ${(3.5).toFixed(1)};
-    float rim = 1.0 - hmBand(t, 2.567, 2.918);
+    float rim = 1.0 - hmBand(t, 2.567, 2.918, hmFw(vec3(0.0, 1.0, 0.0)));
     float flicker = 0.96 + 0.04 * sin(uHallTime * 23.0 + p.z * 1.7);
     float under = vHallN.y < -0.5 ? 1.35 : 1.0;
     glow = ${LAMP} * 1.9 * under * flicker * (1.0 - rim);
     c = mix(vec3(0.05), vec3(0.5, 0.34, 0.12), rim);
-  } else if (k == 9.0) {
+  } else {
     // frosted glass in the ceiling, in leaded panes
-    float lead = max(hmLine(fract(p.x / 0.34 + 0.5) - 0.5, 0.025), hmLine(fract(lz / 0.3) - 0.5, 0.03));
+    float lead = max(hmLine(fract(p.x / 0.34 + 0.5) - 0.5, 0.025, hmFw(vec3(1.0 / 0.34, 0.0, 0.0))), hmLine(fract(lz / 0.3) - 0.5, 0.03, hmFw(vec3(0.0, 0.0, 1.0 / 0.3))));
     float fall = 1.0 - 0.12 * length(vec2(p.x / 0.85, lz / 0.6));
     glow = ${LAMP} * 2.8 * fall * (1.0 - lead * 0.85);
     c = vec3(0.04);
-  } else {
-    // outside: dressed stone in courses, the cut ends plainer
-    vec3 n = abs(vHallN);
-    float v = n.x > n.y ? p.y : p.x;
-    float course = floor(v / 0.5);
-    float u = p.z / 1.1 + 0.5 * mod(course, 2.0);
-    float joint = max(hmLine(fract(v / 0.5 + 0.5) - 0.5, 0.025), hmLine(fract(u + 0.5) - 0.5, 0.012));
-    float block = hmHash(vec2(floor(u), course) + floor(vHallN.xy * 3.0));
-    float wear = 0.86 + 0.14 * hmNoise(vec2(p.z, v) * 2.3) + 0.06 * hmNoise(vec2(p.z, v) * 17.0);
-    if (k == 10.0) c *= (0.9 + 0.2 * block) * wear * (1.0 - 0.4 * joint);
-    else c *= wear;
   }
+  return c;
+}
+
+// The outside: dressed stone in courses, the cut ends and the bands plainer.
+vec3 hallOutsidePaint() {
+  hmDx = dFdx(vHall);
+  hmDy = dFdy(vHall);
+  vec3 p = vHall;
+  vec3 n = abs(vHallN);
+  bool side = n.x > n.y;
+  float v = side ? p.y : p.x;
+  vec3 gv = side ? vec3(0.0, 2.0, 0.0) : vec3(2.0, 0.0, 0.0);
+  float course = floor(v / 0.5);
+  float u = p.z / 1.1 + 0.5 * mod(course, 2.0);
+  float joint = max(hmLine(fract(v / 0.5 + 0.5) - 0.5, 0.025, hmFw(gv)), hmLine(fract(u + 0.5) - 0.5, 0.012, hmFw(vec3(0.0, 0.0, 1.0 / 1.1))));
+  float block = hmHash(vec2(floor(u), course) + floor(vHallN.xy * 3.0));
+  float wear = 0.86 + 0.14 * hmNoise(vec2(p.z, v) * 2.3) + 0.06 * hmNoise(vec2(p.z, v) * 17.0);
+  vec3 c = vTint * wear;
+  if (floor(vKind + 0.5) == ${KIND.stone.toFixed(1)}) c *= (0.9 + 0.2 * block) * (1.0 - 0.4 * joint);
   return c;
 }
 `;
 
+const VARYINGS = 'attribute vec3 aTint;\nattribute float aKind;\nvarying vec3 vHall;\nvarying vec3 vHallN;\nvarying vec3 vTint;\nvarying float vKind;\nvarying vec2 vBakeUv;';
+/** While the corridor rises out of the street, only the part within uReveal of uRevealZ is drawn. */
+const REVEAL = 'if (abs(vHall.z - uRevealZ) > uReveal) discard;';
+
+function patch(src: string, find: string, put: string): string {
+  if (!src.includes(find)) throw new Error(`hallway shader: "${find}" not found`);
+  return src.replace(find, put);
+}
+
+function patchVertex(shader: { vertexShader: string }): void {
+  shader.vertexShader = patch(shader.vertexShader, '#include <common>', `#include <common>\n${VARYINGS}`);
+  shader.vertexShader = patch(shader.vertexShader, '#include <begin_vertex>', '#include <begin_vertex>\nvHall = position;\nvHallN = normal;\nvTint = aTint;\nvKind = aKind;\nvBakeUv = uv;');
+}
+
 /**
- * The modelled corridor's material. The uniforms are the hallway's (reveal, time) plus the light.
- * Inside, three's light loop is skipped altogether: the light is the bake, plus a little of the
- * sky's where the open ends let it in.
+ * The inside: its light is the bake, so it has no lights at all (a MeshBasicMaterial), plus a
+ * little of the sky's light where the open ends let it in.
  */
-export function modelMaterial(uniforms: Record<string, THREE.IUniform>): THREE.MeshStandardMaterial {
+function insideMaterial(uniforms: Record<string, THREE.IUniform>, reveal: boolean): THREE.MeshBasicMaterial {
+  const m = new THREE.MeshBasicMaterial();
+  m.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    patchVertex(shader);
+    let f = patch(shader.fragmentShader, '#include <common>', `#include <common>\n${MODEL_PARS}`);
+    f = patch(f, '#include <color_fragment>', `#include <color_fragment>\n${reveal ? REVEAL : ''}\nvec3 hallGlow;\ndiffuseColor.rgb = hallInsidePaint(hallGlow);`);
+    f = patch(
+      f,
+      'reflectedLight.indirectDiffuse += vec3( 1.0 );',
+      `// the bake, stored as the square root of the light (build_hallway.py): square what the sRGB decode gives
+      vec3 bakeRoot = texture2D(uBake, vBakeUv).rgb;
+      // and daylight through the open ends, gone a few metres in
+      float hallEnd = max(0.0, ${(32).toFixed(1)} - abs(vHall.z));
+      reflectedLight.indirectDiffuse += bakeRoot * bakeRoot * uBakeGain + uHallSky * (0.5 * exp(-hallEnd * 0.4));`,
+    );
+    f = patch(
+      f,
+      'vec3 outgoingLight = reflectedLight.indirectDiffuse;',
+      `vec3 outgoingLight = reflectedLight.indirectDiffuse;
+      // brass catches a little more of the light that falls on it, and the lamps glow
+      outgoingLight += reflectedLight.indirectDiffuse * (floor(vKind + 0.5) == ${KIND.brass.toFixed(1)} ? 0.6 : 0.0) + hallGlow;`,
+    );
+    shader.fragmentShader = f;
+  };
+  m.customProgramCacheKey = () => `hallway-inside-${reveal}`;
+  return m;
+}
+
+/** The stone outside, lit by the sun and the sky like the rest of the city. */
+function outsideMaterial(uniforms: Record<string, THREE.IUniform>, reveal: boolean): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0 });
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
-    shader.vertexShader = shader.vertexShader
-      .replace(
-        '#include <common>',
-        '#include <common>\nattribute vec3 aTint;\nattribute float aKind;\nvarying vec3 vHall;\nvarying vec3 vHallN;\nvarying vec3 vTint;\nvarying float vKind;\nvarying vec2 vBakeUv;',
-      )
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvHall = position;\nvHallN = normal;\nvTint = aTint;\nvKind = aKind;\nvBakeUv = uv;');
-    let f = shader.fragmentShader.replace('#include <common>', `#include <common>\n${MODEL_PARS}`);
-    f = f.replace(
-      '#include <color_fragment>',
-      `#include <color_fragment>
-      if (abs(vHall.z - uRevealZ) > uReveal) discard;
-      vec3 hallGlow;
-      diffuseColor.rgb = hallModelPaint(hallGlow);
-      bool hallInside = vKind < ${(OUTSIDE_FROM - 0.5).toFixed(1)};`,
-    );
-    f = f.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += hallGlow;');
-    // the sun, the sky light and the reflections only for the stone outside
-    const begin = '#include <lights_fragment_begin>';
-    const end = '#include <lights_fragment_end>';
-    const a = f.indexOf(begin);
-    const b = f.indexOf(end) + end.length;
-    if (a < 0 || b < end.length) throw new Error('hallway shader: light chunks not found');
-    f =
-      f.slice(0, a) +
-      `if (!hallInside) {\n${f.slice(a, b)}\n} else {
-        // stored as the square root of the light (build_hallway.py): square what the sRGB decode gives
-        vec3 bakeRoot = texture2D(uBake, vBakeUv).rgb;
-        vec3 baked = bakeRoot * bakeRoot * uBakeGain;
-        // daylight through the open ends, gone a few metres in
-        float hallEnd = max(0.0, ${(32).toFixed(1)} - abs(vHall.z));
-        vec3 light = baked + uHallSky * (0.5 * exp(-hallEnd * 0.4));
-        reflectedLight.indirectDiffuse = diffuseColor.rgb * light;
-        // brass catches a little more of the light that falls on it
-        if (floor(vKind + 0.5) == ${KIND.brass.toFixed(1)}) reflectedLight.indirectSpecular = diffuseColor.rgb * light * 0.6;
-      }` +
-      f.slice(b);
+    patchVertex(shader);
+    let f = patch(shader.fragmentShader, '#include <common>', `#include <common>\n${MODEL_PARS}`);
+    f = patch(f, '#include <color_fragment>', `#include <color_fragment>\n${reveal ? REVEAL : ''}\ndiffuseColor.rgb = hallOutsidePaint();`);
     shader.fragmentShader = f;
   };
-  m.customProgramCacheKey = () => 'hallway-model';
+  m.customProgramCacheKey = () => `hallway-outside-${reveal}`;
   return m;
+}
+
+/**
+ * The modelled corridor's two materials, for its two groups (mirrorQuarter): the inside, lit by
+ * the bake alone, and the stone outside, lit like the city. The uniforms are the hallway's
+ * (reveal, time) plus the light. With reveal false they leave out the cut that lets the corridor
+ * rise out of the street, for when it has risen.
+ */
+export function modelMaterials(uniforms: Record<string, THREE.IUniform>, reveal = true): [THREE.MeshBasicMaterial, THREE.MeshStandardMaterial] {
+  return [insideMaterial(uniforms, reveal), outsideMaterial(uniforms, reveal)];
 }

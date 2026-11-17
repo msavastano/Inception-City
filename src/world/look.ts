@@ -41,6 +41,8 @@ export const LOOK = {
   relief: 1,
   /** The rotating hallway: the corridor modelled and baked in Blender (1), or the painted box before it (0). Low quality always has the box. */
   hall: 1,
+  /** TEMPORARY, for timing on a real GPU: 2 leaves out the hallway's reveal cut. */
+  hallx: 0,
   /** Multiply every level's exposure and grade. */
   exposure: 1,
   contrast: 1,
@@ -51,7 +53,7 @@ export const LOOK = {
 export function readLook(params: URLSearchParams): void {
   const tone = params.get('tone');
   if (tone && tone in TONE_CURVES) LOOK.tone = tone as ToneCurve;
-  for (const key of ['ao', 'haze', 'glow', 'relief', 'hall', 'exposure', 'contrast', 'saturation'] as const) {
+  for (const key of ['ao', 'haze', 'glow', 'relief', 'hall', 'hallx', 'exposure', 'contrast', 'saturation'] as const) {
     const v = params.get(key);
     if (v !== null && v !== '' && Number.isFinite(Number(v))) LOOK[key] = Math.max(0, Number(v));
   }

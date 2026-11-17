@@ -156,6 +156,20 @@ describe('the modelled hallway', () => {
     }
   });
 
+  it('draws the inside and the stone outside as two groups, in two draw calls', async () => {
+    const { quarter } = await readModel();
+    const g = mirrorQuarter(quarter);
+    expect(g.groups).toHaveLength(2);
+    const [inner, outer] = g.groups;
+    const idx = g.index!.array;
+    const kind = g.attributes.aKind.array;
+    expect(inner.start).toBe(0);
+    expect(outer.start).toBe(inner.count);
+    expect(inner.count + outer.count).toBe(idx.length);
+    expect(outer.count).toBeGreaterThan(0);
+    for (let i = 0; i < idx.length; i++) expect(kind[idx[i]] >= OUTSIDE_FROM).toBe(i >= inner.count);
+  });
+
   it('shares its kinds with the Blender script that made it', () => {
     const made = Object.fromEntries([...buildScript.matchAll(/^ {4}(\d+): \("(\w+)"/gm)].map((m) => [m[2], Number(m[1])]));
     expect(made).toEqual({ ...KIND });
@@ -186,6 +200,10 @@ describe('mirroring the quarter', () => {
     expect(Array.from(pos.slice(18, 21))).toEqual([1, 0, -1]); // across z = 0
     expect(Array.from(g.attributes.uv.array.slice(18, 20))).toEqual(Array.from(quarter.uv.slice(0, 2)).map((v) => expect.closeTo(v, 6)));
     expect(Array.from(g.attributes.aKind.array)).toEqual(new Array(12).fill(2));
+    expect(g.groups).toEqual([
+      { start: 0, count: 12, materialIndex: 0 },
+      { start: 12, count: 0, materialIndex: 1 },
+    ]);
   });
 
   it('turns the triangles of the copies mirrored once, so they still face their normals', () => {

@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { foldPoint, FoldShape } from '../core/fold';
-import { loadHallwayModel, modelMaterial } from './hallwayModel';
+import { LOOK } from './look';
+import { loadHallwayModel, modelMaterials } from './hallwayModel';
 
 /**
  * THE ROTATING HALLWAY
@@ -202,8 +203,8 @@ export class Hallway {
   /** The light of the sky outside (set every frame by the app): it reaches a few metres in at the open ends. */
   readonly outdoor = this.uniforms.uHallSky.value;
   /** The painted box: drawn until the modelled corridor has loaded, and on Low quality. */
-  private readonly painted: { geometry: THREE.BufferGeometry; material: THREE.Material };
-  private model: { geometry: THREE.BufferGeometry; material: THREE.Material } | null = null;
+  private readonly painted: { geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[] };
+  private model: { geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[] } | null = null;
   private wantModel = false;
   /** Where the modelled corridor is: not asked for yet, on its way, in, or failed to load (the painted box stays). */
   modelState: 'none' | 'loading' | 'ready' | 'failed' = 'none';
@@ -239,7 +240,7 @@ export class Hallway {
             .then((m) => {
               this.uniforms.uBake.value = m.light;
               this.uniforms.uBakeGain.value = m.scale * BAKED_LIGHT;
-              this.model = { geometry: m.geometry, material: modelMaterial(this.uniforms) };
+              this.model = { geometry: m.geometry, material: modelMaterials(this.uniforms, !(LOOK.hallx & 2)) };
               this.modelState = 'ready';
             })
             .catch((e) => {

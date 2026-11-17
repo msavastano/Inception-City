@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { foldPoint, FoldShape } from '../core/fold';
-import { LOOK } from './look';
 import { loadHallwayModel, modelMaterials } from './hallwayModel';
 
 /**
@@ -222,6 +221,11 @@ export class Hallway {
     this.mesh.matrixAutoUpdate = false;
     this.mesh.castShadow = true;
     this.mesh.frustumCulled = false;
+    // Draw the corridor before the city (after the sky): from inside, its walls hide most of the
+    // screen, and the buildings behind them are then turned away by the depth test before they
+    // are painted. Without this three sorts by material, and the model's materials, made last,
+    // came last, so every facade behind the walls was painted first (about 7 ms on Medium).
+    this.mesh.renderOrder = -1;
     this.mesh.visible = false;
   }
 
@@ -240,7 +244,7 @@ export class Hallway {
             .then((m) => {
               this.uniforms.uBake.value = m.light;
               this.uniforms.uBakeGain.value = m.scale * BAKED_LIGHT;
-              this.model = { geometry: m.geometry, material: modelMaterials(this.uniforms, !(LOOK.hallx & 2)) };
+              this.model = { geometry: m.geometry, material: modelMaterials(this.uniforms) };
               this.modelState = 'ready';
             })
             .catch((e) => {

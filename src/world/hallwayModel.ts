@@ -353,13 +353,13 @@ function patchVertex(shader: { vertexShader: string }): void {
  * The inside: its light is the bake, so it has no lights at all (a MeshBasicMaterial), plus a
  * little of the sky's light where the open ends let it in.
  */
-function insideMaterial(uniforms: Record<string, THREE.IUniform>, reveal: boolean): THREE.MeshBasicMaterial {
+function insideMaterial(uniforms: Record<string, THREE.IUniform>): THREE.MeshBasicMaterial {
   const m = new THREE.MeshBasicMaterial();
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     patchVertex(shader);
     let f = patch(shader.fragmentShader, '#include <common>', `#include <common>\n${MODEL_PARS}`);
-    f = patch(f, '#include <color_fragment>', `#include <color_fragment>\n${reveal ? REVEAL : ''}\nvec3 hallGlow;\ndiffuseColor.rgb = hallInsidePaint(hallGlow);`);
+    f = patch(f, '#include <color_fragment>', `#include <color_fragment>\n${REVEAL}\nvec3 hallGlow;\ndiffuseColor.rgb = hallInsidePaint(hallGlow);`);
     f = patch(
       f,
       'reflectedLight.indirectDiffuse += vec3( 1.0 );',
@@ -378,30 +378,29 @@ function insideMaterial(uniforms: Record<string, THREE.IUniform>, reveal: boolea
     );
     shader.fragmentShader = f;
   };
-  m.customProgramCacheKey = () => `hallway-inside-${reveal}`;
+  m.customProgramCacheKey = () => 'hallway-inside';
   return m;
 }
 
 /** The stone outside, lit by the sun and the sky like the rest of the city. */
-function outsideMaterial(uniforms: Record<string, THREE.IUniform>, reveal: boolean): THREE.MeshStandardMaterial {
+function outsideMaterial(uniforms: Record<string, THREE.IUniform>): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0 });
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     patchVertex(shader);
     let f = patch(shader.fragmentShader, '#include <common>', `#include <common>\n${MODEL_PARS}`);
-    f = patch(f, '#include <color_fragment>', `#include <color_fragment>\n${reveal ? REVEAL : ''}\ndiffuseColor.rgb = hallOutsidePaint();`);
+    f = patch(f, '#include <color_fragment>', `#include <color_fragment>\n${REVEAL}\ndiffuseColor.rgb = hallOutsidePaint();`);
     shader.fragmentShader = f;
   };
-  m.customProgramCacheKey = () => `hallway-outside-${reveal}`;
+  m.customProgramCacheKey = () => 'hallway-outside';
   return m;
 }
 
 /**
  * The modelled corridor's two materials, for its two groups (mirrorQuarter): the inside, lit by
  * the bake alone, and the stone outside, lit like the city. The uniforms are the hallway's
- * (reveal, time) plus the light. With reveal false they leave out the cut that lets the corridor
- * rise out of the street, for when it has risen.
+ * (reveal, time) plus the light.
  */
-export function modelMaterials(uniforms: Record<string, THREE.IUniform>, reveal = true): [THREE.MeshBasicMaterial, THREE.MeshStandardMaterial] {
-  return [insideMaterial(uniforms, reveal), outsideMaterial(uniforms, reveal)];
+export function modelMaterials(uniforms: Record<string, THREE.IUniform>): [THREE.MeshBasicMaterial, THREE.MeshStandardMaterial] {
+  return [insideMaterial(uniforms), outsideMaterial(uniforms)];
 }

@@ -1,6 +1,6 @@
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { describe, expect, it } from 'vitest';
-import { HALL_AXIS, HALL_HALF, HALL_LENGTH } from '../src/world/hallway';
+import { HALL_AXIS, HALL_HALF, HALL_LENGTH, Hallway } from '../src/world/hallway';
 import { KIND, mirrorQuarter, OUTSIDE_FROM, Quarter, SEAM } from '../src/world/hallwayModel';
 import { HALLWAY } from '../src/world/hallway/manifest';
 import buildScript from '../art/hallway/build_hallway.py?raw';
@@ -168,6 +168,11 @@ describe('the modelled hallway', () => {
     expect(inner.count + outer.count).toBe(idx.length);
     expect(outer.count).toBeGreaterThan(0);
     for (let i = 0; i < idx.length; i++) expect(kind[idx[i]] >= OUTSIDE_FROM).toBe(i >= inner.count);
+  });
+
+  it('is drawn before the city, so the buildings behind its walls are not painted for nothing', () => {
+    // three sorts opaque things by material otherwise, and the model's materials are made last
+    expect(new Hallway().mesh.renderOrder).toBeLessThan(0);
   });
 
   it('shares its kinds with the Blender script that made it', () => {

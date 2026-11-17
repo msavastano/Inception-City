@@ -369,7 +369,23 @@ Painted surfaces hold up from the air and give themselves away at the kerb: a pa
 - **No tiling.** A 2 m tile repeated down a street shows its pattern from ten metres away. The grainy layers (asphalt, aggregate, gravel, stone) are read twice, the second time at about 0.7 of the scale and turned by a third of a radian, and the two are mixed by a slow noise, so the repeats never line up. The patterned layers (setts, fans, boards) are read once, because their pattern is meant to repeat, and the setts in a gutter turn to run along the street. A wall reads its detail in its own coordinates, along it and up it, shifted by a random number of tiles for each building, so that neighbours do not match and the detail stays put on the wall when a fold bends it.
 - **How it reaches the light.** On the ground the lean is applied in the ground's own axes, found from screen derivatives as on the walls (5.11), so it holds on a curl; on a wall it is added to the relief's lean, and windows, rails and café-explosion holes get none. The roughness map scales the surface's own roughness, so the smoother and the rougher parts of a surface catch a low sun differently. The cavities darken the colour in the hollows. Every pixel reads its detail once, before the painters branch, with gradients worked out first, so the mipmaps are right everywhere and a compiler is free to skip the branches a pixel does not need (5.12).
 - **Only close to.** The detail fades out between about 22 and 36 m on Medium (28 to 46 m on High, 34 to 56 m on Ultra), beyond which it would only shimmer. Low leaves it out of the shaders altogether (it is compiled in only when a `DETAIL` define is set) and never downloads the files. `#detail=0` does the same on any tier, which makes it the fair comparison when timing, and `#detail=2` deepens it.
-- **What it costs.** About 1.2 MB of download after the first frame, about 10 MB of video memory for the array and its mipmaps, and no draw calls. Per pixel close to, it is two to four texture reads.
+- **What it costs.** About 1.2 MB of download after the first frame, about 10 MB of video memory for the array and its mipmaps, and no draw calls. Per pixel close to, it is one texture read, or two where the anti-tiling noise is blending its two scales.
+
+Timed on an integrated GPU (AMD Radeon Vega 8, 1280 × 720, the middle of three page loads per view, before and after alternately), the detail costs nothing measurable: on Medium, by a sunlit Haussmann front, on a pavement, by a brick front, along a street and in the rain, the frame is within about 2 ms of main either way, which is less than that machine drifts between runs, and High and Low showed no difference either. The first version cost Medium about 17 ms a frame by a sunlit wall. Reading the walls' grain after the room trace instead of before it (so that its result is not held through the painter's heaviest part), reading it once wherever the anti-tiling noise has settled on one scale, and leaving it out of the wet street's mirror brought that to nothing. A build that has more to load starts each view later, and the city keeps running meanwhile (in the Rain, a later start draws about 700,000 more triangles), so compare such builds with `--settle`, which starts every view at the same moment: `npm run bench -- --gpu --time --repeat 3 --settle 3000`.
+
+Before and after, from the bench (Medium, the same seed and view):
+
+![The pavement, the kerb and the new granite gutter, before and after](images/surface-detail/pavement-medium.jpg)
+
+![Down a street: asphalt, gutter and paving, before and after](images/surface-detail/road-medium.jpg)
+
+![A Haussmann front from the foot of it, before and after](images/surface-detail/stone-medium.jpg)
+
+![An old-town brick front, before and after](images/surface-detail/brick-close-medium.jpg)
+
+![A board-marked concrete front, before and after](images/surface-detail/concrete-close-medium.jpg)
+
+![A wet corner in the Rain, before and after](images/surface-detail/rain-close-medium.jpg)
 
 ## 6. Scaling
 

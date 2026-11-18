@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { foldedDepthMaterial, foldedMaterial, U } from './city/materials';
+import { foldedDepthMaterial, foldedMaterial, treeDepthMaterial, treeMaterial, treePrepassMaterial, U } from './city/materials';
+import { leafTexture, treeGeometry } from './city/trees';
 import { rng } from './core/rng';
 import { guard, pedestrian, People, TARGET_OUTFIT } from './people/crowd';
 import { Figure } from './people/figure';
@@ -15,6 +16,9 @@ import { ClipName, CLIPS, clip, newPose, samplePose } from './people/rig';
  *   /lab.html#sheet               the figure from four sides in the rest pose
  *   /lab.html#cast                a line-up of the crowd, drawn the way the city draws it
  *   /lab.html#cast&seed=7&look=0.8&sus=0.9    other people, heads turned, suspicious
+ *   /lab.html#trees               the plane trees: a boulevard tree, a park tree, each twice (two seeds, one mirrored)
+ *   /lab.html#trees&far           the same, as their far versions
+ *   /lab.html#trees&fall=0.85&wind=0    autumn or snow (share of the leaves gone), still air
  */
 const params = new URLSearchParams(location.hash.slice(1));
 const canvas = document.getElementById('lab') as HTMLCanvasElement;
@@ -72,10 +76,55 @@ if (cast) {
   scene.add(people.mesh);
 }
 
+// the trees, through the city's own materials: near or far version for all of them
+const trees = params.has('trees');
+if (trees) {
+  for (const { f } of figures) scene.remove(f.mesh);
+  figures.length = 0;
+  floor.scale.setScalar(2.5);
+  Object.assign(sun.shadow.camera, { left: -24, right: 24, top: 24, bottom: -24, far: 120 });
+  sun.position.set(18, 30, 22);
+  sun.shadow.camera.updateProjectionMatrix();
+  U.tLeaves.value = leafTexture();
+  const far = params.has('far');
+  U.uTrees.value.set(far ? -2 : 1e5, far ? -1 : 1e5 + 1, Number(params.get('fall') ?? 0), Number(params.get('wind') ?? 1));
+  U.uFoliageA.value.setHex(0x3a5a22);
+  U.uFoliageB.value.setHex(0x6b8a34);
+  U.uSnow.value = Number(params.get('snow') ?? 0);
+  const lod = far ? 'far' : 'near';
+  const base = treeGeometry(lod);
+  const g = new THREE.InstancedBufferGeometry();
+  g.setIndex(base.index);
+  for (const [name, attr] of Object.entries(base.attributes)) g.setAttribute(name, attr);
+  // x, z, yaw, scale · tone, birth, seed, shape * 2 + mirrored: boulevard trees face the camera's right (+x is the road)
+  const rows = [
+    [-15, 0, 0, 1, 0.5, -10, 0.21, 0],
+    [-5, 0, 0, 1, 0.2, -10, 0.67, 1],
+    [6, 0, 0.5, 1, 0.5, -10, 0.33, 2],
+    [18, 0, 2.1, 1, 0.8, -10, 0.84, 3],
+  ];
+  g.setAttribute('iTree', new THREE.InstancedBufferAttribute(new Float32Array(rows.flatMap((r) => r.slice(0, 4))), 4));
+  g.setAttribute('iLook', new THREE.InstancedBufferAttribute(new Float32Array(rows.flatMap((r) => r.slice(4))), 4));
+  g.instanceCount = rows.length;
+  const mesh = new THREE.Mesh(g, treeMaterial(lod));
+  mesh.customDepthMaterial = treeDepthMaterial(lod);
+  mesh.castShadow = mesh.receiveShadow = true;
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+  // their depth first, as in the city (&nopre: without it, the colour pass writing its own depth)
+  if (params.has('nopre')) (mesh.material as THREE.Material).depthWrite = true;
+  else {
+    const pre = new THREE.Mesh(g, treePrepassMaterial(lod));
+    pre.renderOrder = -1;
+    pre.frustumCulled = false;
+    scene.add(pre);
+  }
+}
+
 const yaw = (Number(params.get('yaw') ?? 25) * Math.PI) / 180;
 const zoom = Number(params.get('zoom') ?? 1);
-const span = sheet ? 9.4 : params.has('all') ? 15 : cast ? 13.5 : 5.4;
-const height = Number(params.get('h') ?? 0.95);
+const span = sheet ? 9.4 : params.has('all') ? 15 : cast ? 13.5 : trees ? 46 : 5.4;
+const height = Number(params.get('h') ?? (trees ? 7 : 0.95));
 camera.position.set(Math.sin(yaw) * span * zoom, height + 0.35 * zoom, Math.cos(yaw) * span * zoom);
 camera.lookAt(0, height, 0);
 
@@ -94,6 +143,10 @@ function frame(): void {
     if (!fig.clip) continue;
     const c = clip(fig.clip);
     fig.f.pose(samplePose(c, frozen ?? (c.loop ? t / c.duration : (t % (c.duration + 0.6)) / c.duration), pose));
+  }
+  if (trees) {
+    U.uTime.value = frozen ?? t;
+    U.uEye.value.copy(camera.position);
   }
   if (people) {
     U.uTime.value = t;

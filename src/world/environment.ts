@@ -134,7 +134,7 @@ export class Environment {
     hemiSky: new THREE.Color(),
     hemiGround: new THREE.Color(),
   };
-  private scalars = { sun: 2, hemi: 1, snow: 0, wet: 0, limbo: 0, haze: 0, mist: 0, exposure: 1 };
+  private scalars = { sun: 2, hemi: 1, snow: 0, wet: 0, limbo: 0, haze: 0, mist: 0, exposure: 1, fall: 0, wind: 1 };
   /** The level's exposure, cross-faded like the rest of its look. */
   get exposure(): number {
     return this.scalars.exposure;
@@ -296,6 +296,8 @@ export class Environment {
     s.haze += (this.level.haze - s.haze) * k;
     s.mist += (this.level.mist - s.mist) * k;
     s.exposure += (this.level.exposure - s.exposure) * k;
+    s.fall += (this.level.leafFall - s.fall) * k;
+    s.wind += (this.level.wind - s.wind) * k;
   }
 
   /** The render targets the look owns (for the bench's memory estimate). */
@@ -362,6 +364,8 @@ export class Environment {
     U.uSeaColor.value.lerp(tmp.setHex(this.level.sea), k);
     U.uFoliageA.value.lerp(tmp.setHex(this.level.foliageA), k);
     U.uFoliageB.value.lerp(tmp.setHex(this.level.foliageB), k);
+    U.uTrees.value.z = this.scalars.fall;
+    U.uTrees.value.w = this.scalars.wind;
 
     this.updateWeather(this.level.weather, camera);
 

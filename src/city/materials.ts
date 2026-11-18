@@ -38,6 +38,18 @@ import {
   SHARD_FRAG_METAL,
   SHARD_FRAG_ROUGH,
   SHARD_VERT_HEAD,
+  TREE_DEPTH_FRAG_HEAD,
+  TREE_PREPASS_FRAG_HEAD,
+  TREE_PREPASS_FRAG_OUT,
+  TREE_PREPASS_FRAG_TEST,
+  TREE_DEPTH_FRAG_TEST,
+  TREE_FRAG_AO,
+  TREE_FRAG_COLOR,
+  TREE_FRAG_EMISSIVE,
+  TREE_FRAG_HEAD,
+  TREE_FRAG_NORMAL,
+  TREE_FRAG_ROUGH,
+  TREE_VERT_HEAD,
 } from './shaders';
 
 /**
@@ -89,9 +101,26 @@ export const U = {
   // The crowd's bones, frame by frame (src/people/crowd.ts); baked when the first person material is made.
   tBones: { value: null as THREE.Texture | null },
   uBoneTexel: { value: new THREE.Vector2(1, 1) },
+  // The trees (src/city/treeField.ts): the leaf atlas (drawn just after the first frame; until then a bare
+  // texel, so the trees stand leafless for a moment), where the near version fades out (metres from the
+  // eye: start, end), the share of the leaves the season has taken, and the wind.
+  tLeaves: { value: bareLeaves() as THREE.Texture },
+  uTrees: { value: new THREE.Vector4(48, 60, 0, 1) },
+  // The main camera, written every frame: the shadow and mirror passes choose a tree's version by it too.
+  uEye: { value: new THREE.Vector3() },
+  // How far from the eye the trees still cast their shadows (metres: start of the fade, end): further out
+  // their shade on the ground is painted (crownShade in the ground painter), at no cost per leaf.
+  uTreeShadow: { value: new THREE.Vector2(150, 180) },
 };
 
-type Kind = 'building' | 'ground' | 'prop' | 'person' | 'shard';
+/** No leaves and no twigs: what the trees wear until the leaf atlas has been drawn. */
+function bareLeaves(): THREE.DataTexture {
+  const tex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+type Kind = 'building' | 'ground' | 'prop' | 'person' | 'shard' | 'tree';
 
 /** One texel per detail layer, standing for a flat surface of average roughness with no cavities. */
 function flatDetail(): THREE.DataArrayTexture {
@@ -149,6 +178,18 @@ const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [s
       ['#include <roughnessmap_fragment>', PERSON_FRAG_ROUGH],
       ['#include <emissivemap_fragment>', PERSON_FRAG_EMISSIVE],
       ['#include <aomap_fragment>', PERSON_FRAG_AO],
+    ],
+  },
+  tree: {
+    vert: TREE_VERT_HEAD,
+    frag: TREE_FRAG_HEAD,
+    call: 'treeVertex',
+    replace: [
+      ['#include <color_fragment>', TREE_FRAG_COLOR],
+      ['#include <roughnessmap_fragment>', TREE_FRAG_ROUGH],
+      ['#include <normal_fragment_maps>', TREE_FRAG_NORMAL],
+      ['#include <emissivemap_fragment>', TREE_FRAG_EMISSIVE],
+      ['#include <aomap_fragment>', TREE_FRAG_AO],
     ],
   },
   shard: {
@@ -241,7 +282,8 @@ export function foldedMaterial(kind: Kind, params: THREE.MeshStandardMaterialPar
     patchHaze(shader);
   };
   mat.customProgramCacheKey = () => `inception-${kind}`;
-  blendIntoSky(mat);
+  // (trees stay well inside the streamed city: they are opaque, their leaves cut out by coverage)
+  if (kind !== 'tree') blendIntoSky(mat);
   if (kind === 'building') {
     buildingMaterials.push(mat);
     applyWallRelief(mat);
@@ -272,8 +314,77 @@ export function foldedDepthMaterial(kind: Kind): THREE.MeshDepthMaterial {
   return mat;
 }
 
+/**
+ * The trees' material: the near version (every branch and leaf card) or the far one (trunk, limbs and a few
+ * big cards that face the camera). Leaves are cut out of their cards by the atlas's coverage, which with the
+ * frame's MSAA becomes soft-edged (alpha to coverage); both sides of a card are lit alike.
+ */
+export function treeMaterial(lod: 'near' | 'far'): THREE.MeshStandardMaterial {
+  // (the depth is written by the pass before, treePrepassMaterial; not writing it here lets the GPU skip hidden leaves)
+  const mat = foldedMaterial('tree', { side: THREE.DoubleSide, alphaTest: 0.5, alphaToCoverage: true, depthWrite: false });
+  if (lod === 'far') mat.defines = { ...mat.defines, TREE_FAR: '' };
+  const folded = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader, renderer) => {
+    folded.call(mat, shader, renderer);
+    // (worldPosition is only used from here on to look up the shadows, and only declared when there are any, as not on Low)
+    const v = shader.vertexShader;
+    shader.vertexShader = v.replace(
+      must(v, '#include <worldpos_vertex>'),
+      '#include <worldpos_vertex>\n#ifdef USE_SHADOWMAP\nworldPosition.xyz += treeShadowPush;\n#endif',
+    );
+  };
+  mat.customProgramCacheKey = () => `inception-tree-${lod}`;
+  return mat;
+}
+
+/** The trees' shadow: a version switches at once halfway through the fade, and leaves cast their clusters' shade. */
+export function treeDepthMaterial(lod: 'near' | 'far'): THREE.MeshDepthMaterial {
+  const mat = foldedDepthMaterial('tree');
+  mat.side = THREE.DoubleSide;
+  mat.defines = { TREE_SHADOW: '', ...(lod === 'far' ? { TREE_FAR: '' } : {}) };
+  const vertexOnly = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader, renderer) => {
+    vertexOnly.call(mat, shader, renderer);
+    let f = shader.fragmentShader;
+    f = f.replace(must(f, '#include <common>'), `#include <common>\n${TREE_DEPTH_FRAG_HEAD}`);
+    f = f.replace(must(f, '#include <alphatest_fragment>'), `#include <alphatest_fragment>\n${TREE_DEPTH_FRAG_TEST}`);
+    shader.fragmentShader = f;
+  };
+  mat.customProgramCacheKey = () => `inception-depth-tree-${lod}`;
+  return mat;
+}
+
+/**
+ * The trees' depth, drawn before their colour. A crown is many leaf cards deep, and a card that is mostly gaps
+ * cannot hide what is behind it from the GPU until its leaves have been worked out, so without this every layer of
+ * leaves would be lit and shaded, each over the last. This pass finds the leaf in front at each pixel cheaply
+ * (one texel read); the colour pass then tests against it without writing depth, so the GPU skips the hidden
+ * leaves before shading them. Its depth is pushed back a hair, so the colour pass always finds its own leaf.
+ */
+export function treePrepassMaterial(lod: 'near' | 'far'): THREE.MeshDepthMaterial {
+  const mat = foldedDepthMaterial('tree');
+  mat.side = THREE.DoubleSide;
+  mat.defines = { TREE_PREPASS: '', ...(lod === 'far' ? { TREE_FAR: '' } : {}) };
+  mat.colorWrite = false;
+  mat.alphaToCoverage = true;
+  mat.polygonOffset = true;
+  mat.polygonOffsetFactor = 1;
+  mat.polygonOffsetUnits = 1;
+  const vertexOnly = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader, renderer) => {
+    vertexOnly.call(mat, shader, renderer);
+    let f = shader.fragmentShader;
+    f = f.replace(must(f, '#include <common>'), `#include <common>\n${TREE_PREPASS_FRAG_HEAD}`);
+    f = f.replace(must(f, '#include <alphatest_fragment>'), TREE_PREPASS_FRAG_TEST);
+    const end = f.lastIndexOf('}');
+    shader.fragmentShader = f.slice(0, end) + TREE_PREPASS_FRAG_OUT + f.slice(end + 1);
+  };
+  mat.customProgramCacheKey = () => `inception-prepass-tree-${lod}`;
+  return mat;
+}
+
 /** Renders fabric coordinates (x, height, z, kind) for GPU picking on folded geometry. */
-export function pickMaterial(kind: Exclude<Kind, 'prop' | 'person' | 'shard'>, kindId: number): THREE.ShaderMaterial {
+export function pickMaterial(kind: Exclude<Kind, 'prop' | 'person' | 'shard' | 'tree'>, kindId: number): THREE.ShaderMaterial {
   const spec = SPEC[kind];
   return new THREE.ShaderMaterial({
     uniforms: { ...U, uKind: { value: kindId } },

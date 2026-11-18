@@ -22,6 +22,8 @@
 // --repeat 3 loads each view three times and reports the middle time and the spread.
 // --settle 3000 starts every view 3 s after its page opened, whatever the build had to load first,
 // which keeps a build that loads more (and so starts later) comparable with one that loads less.
+// --parts trees,near-trees,far-trees,near-tree-shadows,far-tree-shadows,tree-prepass (with --time) then times the same
+// frame with each of those left out in turn, in the same page, and reports how much each one costs.
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -106,6 +108,15 @@ const VIEWS = [
   { id: 'brick-close', extra: true, note: 'Close: an old-town brick wall', level: 1, at: [-86, 131.5, 0.2, 0.15] },
   { id: 'concrete-close', extra: true, note: 'Close: a concrete front', level: 1, at: [-290, -124.5, 0.2, 0.12] },
   { id: 'rain-close', extra: true, note: 'Close: wet paving and asphalt in the rain', level: 2, at: [9.5, -140, 0.1, -0.4] },
+  // The trees: a boulevard's double row, a park, a plaza, under a crown, and from above where the near and far versions meet.
+  { id: 'boulevard', extra: true, note: 'A boulevard and its plane trees, from the middle of the road', level: 1, at: [3, -175, 0, 0.1] },
+  { id: 'canopy', extra: true, note: 'Under a boulevard tree, looking up into the crown', level: 1, at: [10.8, -154, 0.15, 0.75] },
+  { id: 'park', extra: true, note: 'Inside a park', level: 1, at: [270, 18, 0.9, 0.08] },
+  { id: 'plaza', extra: true, note: 'A plaza and its four corner trees', level: 1, at: [22, 136, 0.75, 0.12] },
+  { id: 'trees-above', extra: true, note: 'A boulevard from a rooftop: near trees and far ones', level: 1, cam: { pos: [42, 34, -290], target: [0, 4, -150] } },
+  { id: 'boulevard-night', extra: true, note: 'The boulevard at midnight, under the lamps', level: 1, time: 1, at: [3, -175, 0, 0.1] },
+  { id: 'boulevard-autumn', extra: true, note: 'Level 2: the boulevard in autumn', level: 2, at: [3, -175, 0, 0.1] },
+  { id: 'boulevard-snow', extra: true, note: 'Level 3: the boulevard in snow', level: 3, at: [3, -175, 0, 0.1] },
   { id: 'crowd', extra: true, note: 'Pedestrians at a busy crossing', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, frames: 40 },
   { id: 'stares', extra: true, note: 'The dream unsteady: the crowd stops and stares', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, unstable: 0.55, frames: 160, dt: 0.05 },
 ];
@@ -129,6 +140,7 @@ function args() {
     time: a.includes('--time'),
     repeat: Math.max(1, Number(get('repeat', '1')) || 1),
     settle: Math.max(0, Number(get('settle', '0')) || 0),
+    parts: get('parts', '') ? get('parts', '').split(',') : [],
     gpu: a.includes('--gpu'),
     channel: get('channel', ''),
     compare: compare >= 0 ? [resolve(a[compare + 1]), resolve(a[compare + 2])] : null,
@@ -161,11 +173,12 @@ function serve(dir) {
 }
 
 /** Runs in the page: set the view up, fast-forward until the city has streamed in, draw one frame. */
-async function shoot([v, time, settle]) {
+async function shoot([v, time, settle, parts]) {
   const d = window.dream;
   // wait for anything still loading (the hallway's model and the surface detail; builds before them have none)
   await d.hallway.ready;
   await d.detailReady;
+  await d.treesReady;
   // and, with --settle, until that many milliseconds after the page opened, so that a build which has more to load
   // and one which has less start the view at the same moment (the city runs on its own clock while it waits)
   const wait = (settle ?? 0) - performance.now();
@@ -264,6 +277,42 @@ async function shoot([v, time, settle]) {
     const t0 = performance.now();
     for (let i = 0; i < 40; i++) draw();
     out.stats.ms = Math.round(((performance.now() - t0) / 40) * 100) / 100;
+    if (parts.length) {
+      // What each part costs: the same frame with that part left out, in turn, three rounds, all in this one page
+      // load (a page load moves the frame time more than a part may cost). Each is reported as the time saved.
+      const t = d.streamer.trees;
+      const PARTS = {
+        trees: [() => [t.group], 'visible'],
+        'near-trees': [() => [t.near.mesh, t.near.pre], 'visible'],
+        'far-trees': [() => [t.far.mesh, t.far.pre], 'visible'],
+        'near-tree-shadows': [() => [t.near.mesh], 'castShadow'],
+        'far-tree-shadows': [() => [t.far.mesh], 'castShadow'],
+        // (without the depth pass, the trees' colour writes depth itself)
+        'tree-prepass': [() => [{ set visible(on) { t.setPrepass(on); } }], 'visible'],
+      };
+      const time20 = () => {
+        for (let i = 0; i < 3; i++) draw();
+        const t = performance.now();
+        for (let i = 0; i < 20; i++) draw();
+        return (performance.now() - t) / 20;
+      };
+      const runs = Object.fromEntries(['all', ...parts].map((k) => [k, []]));
+      for (let r = 0; r < 3; r++) {
+        runs.all.push(time20());
+        for (const k of parts) {
+          const [get, key] = PARTS[k] ?? [];
+          const objs = (get?.() ?? []).filter(Boolean);
+          if (!objs.length) continue;
+          for (const obj of objs) obj[key] = false;
+          runs[k].push(time20());
+          for (const obj of objs) obj[key] = true;
+        }
+      }
+      const mid = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)];
+      const all = mid(runs.all);
+      out.stats.parts = Object.fromEntries(parts.map((k) => [k, runs[k].length ? Math.round((all - mid(runs[k])) * 100) / 100 : null]));
+      out.stats.partsBase = Math.round(all * 100) / 100;
+    }
   }
   return out;
 }
@@ -316,7 +365,7 @@ async function run(o) {
       const hash = `s=${SEED}&q=${tier}&l=${v.level}${v.time !== undefined ? `&t=${v.time}` : ''}${o.hash ? `&${o.hash}` : ''}`;
       await page.goto(`${base}#${hash}`);
       await page.waitForFunction(() => window.dream, null, { timeout: 120000 });
-      return await page.evaluate(shoot, [v, o.time, o.settle]);
+      return await page.evaluate(shoot, [v, o.time, o.settle, o.parts]);
     } finally {
       await context.close().catch(() => {});
     }
@@ -354,6 +403,7 @@ async function run(o) {
           `${stats.ms !== undefined ? `${stats.ms.toFixed(2).padStart(7)} ms a frame  ` : ''}` +
           `${stats.runs ? `(${stats.runs.map((t) => t.toFixed(1)).join(' / ')})  ` : ''}(${((Date.now() - t0) / 1000).toFixed(0)} s)`,
       );
+      if (stats.parts) console.log(`  ${Object.entries(stats.parts).map(([k, ms]) => `${k} ${ms === null ? '-' : `${ms.toFixed(2)} ms`}`).join(', ')}  (of ${stats.partsBase} ms)`);
     }
   }
   await browser.close();

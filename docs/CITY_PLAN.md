@@ -40,7 +40,7 @@ Districts are not hand-placed. Two low-frequency noise fields ("downtown" and "o
 
 ### 2.3 Street furniture
 
-Boulevards carry plane trees. Every street has lamps on both sides at a fixed rhythm (every 32 m), which at night lay pools of warm light on the pavement. Zebra crossings mark every intersection, and they double as the projections' crossing points.
+Boulevards carry London planes in a row down each side, 2.5 m out from the building line, pruned flat on the facade side and leaning over the road (5.14); parks and the corners of the squares have a broader, rounder kind. Every street has lamps on both sides at a fixed rhythm (every 32 m), which at night lay pools of warm light on the pavement. Zebra crossings mark every intersection, and they double as the projections' crossing points.
 
 ---
 
@@ -387,6 +387,43 @@ Before and after, from the bench (Medium, the same seed and view):
 
 ![A wet corner in the Rain, before and after](images/surface-detail/rain-close-medium.jpg)
 
+### 5.14 Plane trees
+
+The trees were a cylinder under two twenty-sided balls. A Paris boulevard is lined with London planes, and they are half of what makes it look like Paris: a pale trunk shedding its bark in grey, olive and cream patches, a fork a little above head height into a few steep limbs, and a broad crown that the city's gardeners keep cut flat on the side of the facades and raised clear of the pavement, so it leans out over the road. The city now grows those.
+
+- **Two shapes, grown in code.** [`src/city/trees.ts`](../src/city/trees.ts) grows each from a seed: a trunk with a flared foot, limbs that rise steeply and then spread, branches that divide off them until they reach the crown's shell, clusters of leaves at the branch tips, and leaf cards spread through the shell (a third of them round the clusters, the rest in a lumpy layer, so the outline is not an ellipsoid). The boulevard plane forks at about 4.4 m into four limbs, leans 1 m out over the road, keeps no leaves below about 5 m (walkers and lamps pass under it) and none more than 1.6 m behind its trunk (`SHAPES[0].back`), which clears the facades 2.5 m behind it. The park plane forks lower into five limbs and spreads its crown wider and rounder. Both shapes are grown at start in about 30 to 50 ms; there is no model file.
+- **A near version and a far one.** Each shape has a near version (every limb and branch as a tube, about 470 to 560 leaf cards: 1,500 to 1,900 triangles) and a far one (the trunk and limbs as coarser tubes, and the leaf cards gathered into 44 to 54 big cards that turn to face the camera: 170 to 210 triangles). Both shapes sit in one geometry per version and a tree keeps only its own. The far version is cheap enough to go all the way to the edge of the streamed props, so there is no third, flat impostor: at about 200 triangles a tree it would save less than its own draw call and baked texture would cost, and that far out the trees are well into the haze.
+- **Two lists.** [`src/city/treeField.ts`](../src/city/treeField.ts) keeps every tree that is out (the chunks inside the props ring, 6.4) in the far list, and the up to 256 nearest to the eye, measured where their feet stand once folded, in the near list, both nearest first. Unlike the old slab of 128 trees per chunk, the lists are compact, so nothing is drawn for an empty slot (the old trees drew 11,520 instances whether a tree stood there or not). The shader then fades one version into the other with a dither, over 12 m ending at 60 m on Medium (80 m on High, 100 m on Ultra); Low draws the far version only. The shadow map switches versions halfway through the fade, and every pass measures from the main camera, so the shadow and the wet-street mirror show the version the eye sees.
+- **Depth first.** A crown is several leaf cards deep at every pixel, and a card that is mostly gaps cannot hide anything from the GPU until its leaves have been cut out, so drawn the usual way every layer of leaves is lit and shaded, one over the other. That made the first version of these trees cost 8 to 23 ms a frame on Medium on an integrated GPU. So each list is drawn twice: first its depth alone (`treePrepassMaterial`), with a fragment shader that only reads the atlas and cuts the leaves out exactly as the colour pass does, then its colour, which tests against that depth without writing any. The GPU then skips every leaf behind the front one before shading it, and the facades behind the crowns too. The depth pass is pushed back by a hair (a polygon offset), so the colour pass always finds its own leaf. It costs two draw calls and the trees' vertices a second time.
+- **Shadows nearby.** Every card a tree casts into the shadow map is many shadow-map texels to fill, so only the trees within 180 m of the eye on Medium (240 m on High, 300 m on Ultra) cast shadows; between 80% and all of that distance each tree's shadow shrinks away. Beyond it the ground still paints its soft pool of shade under every crown (5.8).
+- **Leaves.** The leaves are cut from a 512 × 512 atlas that the game draws itself just after the first frame (about a tenth of a second): five-lobed leaves with their veins, on slanting twigs, bigger in the near cells and denser in the far ones. A card shows a leaf where its coverage passes a half, with alpha to coverage on the frame's multisampling, so the edges are soft rather than stair-stepped. The atlas's smaller mip levels are made so that each keeps the same share of covered texels as the full one (a quantile per cell), because a plain average falls under the cut and the crowns would thin out to twigs with distance. Each leaf also carries a random id, which is how the season takes them one at a time.
+- **No two alike.** Each tree turns and stretches each of its limbs its own way, from a hash of where it stands, and half of them are mirrored, so a row of them does not repeat. A boulevard tree turns its lean towards the road within 3° (more and the flat back would turn its edge into the wall).
+- **Light.** A leaf card is lit as a piece of the round crown it belongs to (its normal is mostly the crown's), the same from either side; the inside of the crown sees less of the sky and is darker; the sun shows through the leaves on the shaded side. The bark is painted from 3D noise in the plane's patches, and is greyer up in the crown where the limbs are thin. At night the street lamps light the crowns from below, worked out from where the lamps stand rather than from extra lights. Shadows fold with the city like everything else (6.6). A far card faces the sun when the shadow map is drawn and the camera when the frame is, so its shadow is looked up about a metre out of the crown, or each card would shade half of itself along a straight line. The pool of shade painted on the ground under each tree (5.8) is now the size of the new crowns.
+- **Weather and seasons.** The City is summer with a breeze. The Rain is autumn: the leaves turn rust, a third of them are gone and the wind is up. The Snow leaves the planes nearly bare, with snow along the tops of the limbs. In Limbo they are half bare and grey. Between levels it all fades as the palette does.
+- **What it costs.** Nothing is downloaded: about 22 kB more JavaScript (8 kB gzipped), the leaf atlas (about 1.3 MB of video memory with its mip levels) and about 0.1 s of drawing it after the first frame, plus 30 to 50 ms growing the trees at start. Four draw calls in the frame where the old trees had one, and two in the shadow map where they had one (Low, which draws only the far version and has no shadows, one more than before). The bench counts about 0.65 million more triangles on a Medium boulevard (3.55 to 4.2 million), most of it the depth pass drawing the trees' triangles a second time; the old trees' count looked small only because most of their slots were empty.
+
+Timed on an integrated GPU (AMD Radeon Vega 8, 1280 × 720, the middle of three page loads per view, against main), the trees cost Low about 1 ms a frame (0.5 to 1.5 ms on a 23 ms frame), Medium about 1 to 6.5 ms where they are in view (the boulevard the most, 6.5 ms on a 61 ms frame) and High 0.5 to 3.5 ms, except from inside a park, about 10 ms on a 77 ms frame. That machine drifts by 5 to 10 ms between page loads on Medium and High, so a single view can come out either side of that: the park on Medium came out 5 ms faster than main, and a street with no trees in view 14 ms slower on Medium and 6 ms faster on High. The first version cost Medium 8 to 23 ms and High 7 to 21 ms; the depth pass, the nearest-first order and the shorter shadow reach brought it down. `npm run bench -- --gpu --time --parts trees,near-trees,far-trees,tree-prepass` times a view with each part left out in turn in the same page load, which separates a part's cost from the drift between loads: on Medium, leaving out the depth pass makes the frame 7 to 15 ms slower, the rest is split about evenly between the near and far versions, and the trees' shadows cost nothing measurable; on Low it is almost all the far version.
+
+`#trees=` scales how far out the near version reaches (0 is the far version everywhere, as on Low, 2 twice as far). The bench has views for the trees (boulevard, canopy, park, plaza, trees-above, and the boulevard at night, in the Rain and in the Snow) and `/lab.html#trees` stands the four variants in a row.
+
+Before and after, from the bench (Medium, the same seed and view):
+
+![A boulevard from the middle of the road, before and after](images/plane-trees/boulevard-medium.jpg)
+
+![Under a boulevard tree, looking up into the crown, before and after](images/plane-trees/canopy-medium.jpg)
+
+![Inside a park, before and after](images/plane-trees/park-medium.jpg)
+
+![A plaza and its corner trees, before and after](images/plane-trees/plaza-medium.jpg)
+
+![A boulevard from a rooftop, where the near and far versions meet, before and after](images/plane-trees/trees-above-medium.jpg)
+
+![The boulevard at midnight, the crowns lit by the lamps, before and after](images/plane-trees/boulevard-night-medium.jpg)
+
+![Level 2: the boulevard in autumn, before and after](images/plane-trees/boulevard-autumn-medium.jpg)
+
+![Level 3: the boulevard in snow, before and after](images/plane-trees/boulevard-snow-medium.jpg)
+
 ## 6. Scaling
 
 The goal is a city that is effectively infinite, foldable in real time, and still smooth on a phone. Each of the decisions below exists to keep one cost constant as the city grows.
@@ -401,21 +438,22 @@ Candidate chunks are enumerated in fabric space around the camera's fabric focus
 
 ### 6.3 Constant draw calls
 
-Each kind of object (buildings, roofs and chimneys, fine ground, coarse ground, trees, lamps, the crowd, the monument) is a single instanced mesh. Each loaded chunk owns one fixed-size slab of instances in each mesh (224 buildings, 288 roof pieces, 128 trees, 128 lamps). Loading a chunk writes its slab and uploads just that range. Unloading zeroes it. Empty slots collapse to a point in the vertex shader before any fold maths runs.
+Each kind of object (buildings, roofs and chimneys, fine ground, coarse ground, lamps, the crowd, the monument) is a single instanced mesh. Each loaded chunk owns one fixed-size slab of instances in each mesh (224 buildings, 288 roof pieces, 128 lamps). Loading a chunk writes its slab and uploads just that range. Unloading zeroes it. Empty slots collapse to a point in the vertex shader before any fold maths runs. The trees are the exception: their near and far versions are two compact lists, rebuilt when a chunk's props come or go and, for the near one, as the eye moves (5.14), because a slab's empty slots cost too much at a couple of thousand triangles a tree. Each list is drawn twice, its depth and then its colour (5.14).
 
-The result is about eleven draw calls for the whole city, whether it has two thousand buildings or twenty thousand. (At night the lamp halos add one more, and another in the Rain, where the wet street mirrors them.)
+The result is about fourteen draw calls for the whole city, whether it has two thousand buildings or twenty thousand. (At night the lamp halos add one more, and another in the Rain, where the wet street mirrors them.)
 
 ### 6.4 Level of detail
 
 - **Ground tiles** come in two tessellations. Only chunks crossed by a curl get the fine 40 × 40 grid needed to bend smoothly. Everywhere else a 2 × 2 tile is enough.
 - **Props** (trees and lamps) are only written for chunks inside a smaller ring around the viewer, with their own budget per frame.
+- **Trees** have a near and a far version (5.14): the near one, every branch and leaf, for the closest 256 within 60 m on Medium (80 m High, 100 m Ultra), dithered into the far one, its limbs and about fifty camera-facing cards, everywhere else. Low draws only the far one. Only the trees within 180 m on Medium (240 m High, 300 m Ultra) cast shadows; further out their shade is painted.
 - **Facades** fade their window pattern to its average colour once a window is only a few pixels wide, which removes moiré without textures or mipmaps. The rooms behind the windows are only traced while a window is big enough on screen to show one, and the window reveals, frames and carved joints (5.11) only within a few dozen metres.
 - **The crowd** is a single instanced mesh of skinned people (5.9). Its size follows the quality tier, from 180 to 900 people, and only those within 110 m are drawn into the shadow map.
 - **The café explosion** throws between 1,600 (Low) and 7,000 (Ultra) shards, all in one instanced mesh that is hidden the rest of the time. The building shader's blast branch costs one uniform test per pixel while the dream holds.
 
 ### 6.5 Painted, not textured
 
-All the colour comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, the rooms behind the windows, snow cover, puddles and raindrop ripples, crosswalks, park paths, lamp pools, contact shadows (5.8), window reveals and the shadows under ledges (5.11), glowing crease lines and the glowing lattice on the underside of a fold. The only images are the hallway's baked light (5.12) and the shape of seven scanned surfaces seen close to (5.13), and neither paints a surface's colour. The whole app, including the 3D engine and the people's packed animation (5.9), is about 1.07 MB of JavaScript (about 330 kB gzipped), beside about 830 kB of recorded sound (5.10) and 1.2 MB of surface detail, both fetched as they are needed.
+All the colour comes from procedural shading: limestone courses, shopfronts and awnings, balconies, cornices, brick bonding, curtain-wall mullions, mansard zinc, the rooms behind the windows, snow cover, puddles and raindrop ripples, crosswalks, park paths, lamp pools, contact shadows (5.8), window reveals and the shadows under ledges (5.11), glowing crease lines and the glowing lattice on the underside of a fold. The only images are the hallway's baked light (5.12), the shape of seven scanned surfaces seen close to (5.13), neither of which paints a surface's colour, and the trees' leaves (5.14), which the game draws itself at start. The whole app, including the 3D engine and the people's packed animation (5.9), is about 1.10 MB of JavaScript (about 335 kB gzipped), beside about 830 kB of recorded sound (5.10) and 1.2 MB of surface detail, both fetched as they are needed.
 
 ### 6.6 Bounded fold cost
 
@@ -423,14 +461,14 @@ Fold state is two arrays of eight vec4 uniforms. Every vertex pays for at most e
 
 ### 6.7 Adaptive quality
 
-Four tiers (low, medium, high, ultra) set pixel ratio, shadow map size and extent, bloom, the wet-street mirror's resolution, how far the window reveals and the surface detail reach, view distance, prop distance, chunk cap and crowd size. The app starts from a guess based on the device and then watches the frame rate, stepping down a tier when it drops below about 38 fps and back up (as far as High) when it holds above 57 fps. Ultra is opt-in from the panel, and `#q=` in the URL pins any tier.
+Four tiers (low, medium, high, ultra) set pixel ratio, shadow map size and extent, bloom, the wet-street mirror's resolution, how far the window reveals, the surface detail and the trees' near version reach, view distance, prop distance, chunk cap and crowd size. The app starts from a guess based on the device and then watches the frame rate, stepping down a tier when it drops below about 38 fps and back up (as far as High) when it holds above 57 fps. Ultra is opt-in from the panel, and `#q=` in the URL pins any tier.
 
-| Tier | Pixel ratio | Shadows | Bloom | Wet-street mirror | Window reveals | Surface detail | View distance | Chunk cap | Crowd |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Ultra | 2 | 4096 | yes | ½ resolution | to 64 m | to 56 m | 1300 m | 150 | 900 |
-| High | 1.5 | 2048 | yes | ½ resolution | to 48 m | to 46 m | 1050 m | 120 | 600 |
-| Medium | 1 | 2048 | yes | ⅓ resolution | to 38 m | to 36 m | 820 m | 90 | 400 |
-| Low | 0.75 | off | no | lamp reflections only | flat walls | none | 620 m | 60 | 180 |
+| Tier | Pixel ratio | Shadows | Bloom | Wet-street mirror | Window reveals | Surface detail | Trees, near version | View distance | Chunk cap | Crowd |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Ultra | 2 | 4096 | yes | ½ resolution | to 64 m | to 56 m | to 100 m | 1300 m | 150 | 900 |
+| High | 1.5 | 2048 | yes | ½ resolution | to 48 m | to 46 m | to 80 m | 1050 m | 120 | 600 |
+| Medium | 1 | 2048 | yes | ⅓ resolution | to 38 m | to 36 m | to 60 m | 820 m | 90 | 400 |
+| Low | 0.75 | off | no | lamp reflections only | flat walls | none | far only | 620 m | 60 | 180 |
 
 ### 6.8 State that fits in a link
 
@@ -481,8 +519,11 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 ### Milestone 1.10: the hallway, built in Blender (done)
 - The rotating hallway as a modelled hotel corridor (wainscot, mouldings, panelled doors with their numbers, sconces, a coffered ceiling, carpet and wallpaper) with its lamps' light baked in Cycles, in a 110 kB file, built from a script with nothing downloaded (5.12)
 
-### Milestone 1.11: surface detail (this release)
+### Milestone 1.11: surface detail (done)
 - The grain of asphalt, paving, setts, gravel, worn stone and board-marked concrete close to, from seven CC0 scans of which only the shape is kept, in one texture array of 1.2 MB, with granite gutters along the kerbs (5.13)
+
+### Milestone 1.12: plane trees (this release)
+- London planes grown in code, a boulevard kind pruned flat on the facade side and a park kind, each with a near version of every branch and leaf and a far one of its limbs and a few big cards, leaves cut from an atlas the game draws itself, with wind, seasons by level and lamp light at night (5.14)
 
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
@@ -513,6 +554,8 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/city/detail.ts`, `src/city/detail/` | The surface detail: the packed scans and the loader that unpacks them into one texture array |
 | `scripts/pack-detail.mjs` | Packs the scanned surfaces from Poly Haven into `src/city/detail/` |
 | `src/city/pool.ts` | The slab allocator for instanced attributes |
+| `src/city/trees.ts` | The plane trees: the two shapes, how they are grown, their near and far versions, the leaf atlas |
+| `src/city/treeField.ts` | Which trees are out and which are close enough for their near version, as two instanced lists |
 | `src/city/streamer.ts` | World-space streaming, LOD, collision and raise-brush edits |
 | `src/world/` | Sky, sun and weather, dream levels, the projections crowd |
 | `src/world/atmosphere.ts` | The sky's colour function and the haze that replaces fog in every folded material |
@@ -528,7 +571,7 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/people/figure.ts` | One skinned figure with its own bones (the dreamer) |
 | `src/people/crowd.ts` | The crowd's mesh, the bone texture, the wardrobe and the instanced `People` |
 | `scripts/pack-people.mjs` | Packs the skeleton and clips from the animation library into `rigdata.ts` and measures each walk's stride |
-| `lab.html`, `src/lab.ts` | A dev-only page for looking at the figure, the clips and the crowd out of the city |
+| `lab.html`, `src/lab.ts` | A dev-only page for looking at the figure, the clips, the crowd and the trees out of the city |
 | `src/modes/` | Architect controls, Dream Walk controls, presets, the ride fold (`ride.ts`), the third-person camera boom (`chase.ts`) |
 | `src/game/heist.ts` | Heist mode's rules: the topside clock, health, Limbo, placement and the kicks |
 | `src/game/marks.ts` | Heist mode's things in the city: sleep machine, gramophone, totem, target and their beams |
@@ -541,4 +584,4 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `scripts/listen.mjs` | The listening bench: the game's sound recorded scene by scene, with levels |
 | `scripts/bench.mjs` | The screenshot bench: eight seeded views per quality tier, with draw calls, triangles and memory |
 | `src/ui/` | Styles and the HUD totem |
-| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror, café explosion, Heist mode, third-person camera, lighting-layout, people and sound tests |
+| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror, café explosion, Heist mode, third-person camera, lighting-layout, people, sound and tree tests |

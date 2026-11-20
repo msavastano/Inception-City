@@ -3,9 +3,10 @@ import { CHUNK, GROUND_COARSE_SEGMENTS, GROUND_FINE_SEGMENTS, SLAB } from '../co
 import { Fold, FoldShape, foldPoint } from '../core/fold';
 import { hash3 } from '../core/rng';
 import { BuildingRec, ChunkData, generateChunk } from './generator';
-import { buildingGeometry, groundGeometry, lampGeometry } from './geometry';
+import { buildingGeometry, fixturesGeometry, furnitureGeometry, groundGeometry, lampGeometry } from './geometry';
 import { foldedDepthMaterial, foldedMaterial, pickMaterial } from './materials';
 import { SlabPool } from './pool';
+import type { KitRec } from './streetLife';
 import { TreeField } from './treeField';
 
 /** A building's box as it is drawn (brush edits applied), for effects that need its walls. */
@@ -37,8 +38,17 @@ interface LoadedChunk {
   props: boolean;
   /** When the street furniture last came out (it grows in from then). */
   propsBorn: number;
+  /** The street life kit's slab in its two meshes while it is out (a tighter ring than the props), or -1. */
+  kitSlot: number;
   born: number;
 }
+
+/**
+ * The street life kit comes out on chunks this much closer than the lamps and trees do (a share of the props'
+ * distance). A café chair is lost in the haze long before a lamp post is, and each chunk with the kit out costs
+ * the vertex shader its whole slab of every model.
+ */
+export const KIT_SHARE = 0.45;
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
 
@@ -65,6 +75,13 @@ export class CityStreamer {
   /** The plane trees (src/city/treeField.ts): a near and a far version, each one instanced list. */
   readonly trees = new TreeField();
   readonly lamps: SlabPool;
+  /**
+   * The street life kit (src/city/streetLife.ts): small furniture (no shadows, like the lamps), and the fixtures
+   * and parked cars. Their slabs are allocated on their own, only to chunks inside the kit's ring, so the meshes
+   * stay as short as that ring.
+   */
+  readonly furniture: SlabPool;
+  readonly fixtures: SlabPool;
   readonly groundFine: SlabPool;
   readonly groundCoarse: SlabPool;
 
@@ -89,6 +106,8 @@ export class CityStreamer {
     this.buildings = new SlabPool(buildingGeometry(6), bAttrs, SLAB.building, maxChunks, this.buildingMaterial);
     this.roofs = new SlabPool(buildingGeometry(1), bAttrs, SLAB.roof, maxChunks, this.buildingMaterial);
     this.lamps = new SlabPool(lampGeometry(), pAttrs, SLAB.lamp, maxChunks, this.propMaterial);
+    this.furniture = new SlabPool(furnitureGeometry(), pAttrs, SLAB.furniture, maxChunks, this.propMaterial);
+    this.fixtures = new SlabPool(fixturesGeometry(), pAttrs, SLAB.fixtures, maxChunks, this.propMaterial);
     this.groundFine = new SlabPool(groundGeometry(GROUND_FINE_SEGMENTS), gAttrs, 1, maxChunks, this.groundMaterial);
     this.groundCoarse = new SlabPool(groundGeometry(GROUND_COARSE_SEGMENTS), gAttrs, 1, maxChunks, this.groundMaterial);
 
@@ -96,6 +115,8 @@ export class CityStreamer {
       [this.buildings, bDepth, true],
       [this.roofs, bDepth, true],
       [this.lamps, this.propDepth, false],
+      [this.furniture, this.propDepth, false],
+      [this.fixtures, this.propDepth, true],
       [this.groundFine, gDepth, true],
       [this.groundCoarse, gDepth, true],
     ] as const) {
@@ -190,6 +211,7 @@ export class CityStreamer {
     const limit = Math.min(this.maxChunks, this.limit);
     const keep = new Set(wanted.slice(0, limit).map((w) => key(w.cx, w.cz)));
     const near = new Set(wanted.filter((w) => w.dist < propDist).map((w) => key(w.cx, w.cz)));
+    const kitNear = new Set(wanted.filter((w) => w.dist < propDist * KIT_SHARE).map((w) => key(w.cx, w.cz)));
 
     for (const k of [...this.loaded.keys()]) if (!keep.has(k)) this.unload(k);
 
@@ -208,6 +230,8 @@ export class CityStreamer {
       if (fine !== c.fine) this.writeGround(c, fine, -100);
       const want = near.has(c.key);
       if (want !== c.props && propBudget-- > 0) this.writeProps(c, want, want && c.born < now ? now : c.born);
+      const kit = kitNear.has(c.key);
+      if (kit !== c.kitSlot >= 0 && propBudget-- > 0) this.writeKit(c, kit, kit && c.born < now ? now : c.born);
     }
   }
 
@@ -240,7 +264,7 @@ export class CityStreamer {
     const slot = this.buildings.acquire();
     if (slot < 0) return;
     for (const pool of [this.roofs, this.lamps]) pool.claim(slot);
-    const chunk: LoadedChunk = { key: key(cx, cz), cx, cz, slot, data, fine: false, props: false, propsBorn: born, born };
+    const chunk: LoadedChunk = { key: key(cx, cz), cx, cz, slot, data, fine: false, props: false, propsBorn: born, kitSlot: -1, born };
     this.loaded.set(chunk.key, chunk);
 
     const grow = (i: number) => this.edits.get(`${cx},${cz},${i}`) ?? 1;
@@ -288,6 +312,44 @@ export class CityStreamer {
     this.trees.changed();
   }
 
+  /** Bring the street life kit out on a chunk (into a slab of its own in both meshes), or put it away. */
+  private writeKit(c: LoadedChunk, on: boolean, born: number): void {
+    if (!on) {
+      this.furniture.release(c.kitSlot);
+      this.fixtures.release(c.kitSlot);
+      c.kitSlot = -1;
+      return;
+    }
+    const slot = this.furniture.acquire();
+    if (slot < 0) return;
+    this.fixtures.claim(slot);
+    c.kitSlot = slot;
+    const write = (pool: SlabPool, list: readonly KitRec[], salt: number) => {
+      list.forEach((t, i) => {
+        pool.set(slot, i, 'iPosYaw', t.x, 0, t.z, t.yaw);
+        pool.set(slot, i, 'iParam', t.scale, t.tone, born + hash3(i + salt, c.cx, c.cz) * 1.2, 0);
+        pool.set(slot, i, 'iState', 0, 1, t.variant, t.debris ? 1 : 0);
+      });
+      pool.clearFrom(slot, list.length);
+      pool.flush(slot);
+    };
+    write(this.furniture, c.data.furniture, 0);
+    write(this.fixtures, c.data.fixtures, 977);
+  }
+
+  /** The café furniture out on loaded chunks within r of a fabric point (the café explosion throws it). */
+  furnitureNear(x: number, z: number, r: number): KitRec[] {
+    const out: KitRec[] = [];
+    for (const c of this.loaded.values()) {
+      if (c.kitSlot < 0) continue;
+      const x0 = c.cx * CHUNK;
+      const z0 = c.cz * CHUNK;
+      if (x + r < x0 || x - r > x0 + CHUNK || z + r < z0 || z - r > z0 + CHUNK) continue;
+      for (const p of c.data.furniture) if (p.debris && Math.hypot(p.x - x, p.z - z) < r) out.push(p);
+    }
+    return out;
+  }
+
   private writeGround(c: LoadedChunk, fine: boolean, born: number, initial = false): void {
     const from = fine ? this.groundCoarse : this.groundFine;
     const to = fine ? this.groundFine : this.groundCoarse;
@@ -305,6 +367,7 @@ export class CityStreamer {
     const c = this.loaded.get(k);
     if (!c) return;
     for (const pool of [this.buildings, this.roofs, this.lamps, this.groundFine, this.groundCoarse]) pool.release(c.slot);
+    if (c.kitSlot >= 0) this.writeKit(c, false, 0);
     this.loaded.delete(k);
     if (c.props) this.trees.changed();
   }

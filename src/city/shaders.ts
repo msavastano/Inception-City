@@ -5,6 +5,7 @@ import {
   CHUNK,
   CHUNK_BLOCKS,
   COLLAPSE_RADIUS,
+  FURNITURE_DEBRIS_RADIUS,
   GUTTER,
   LAMP_OFFSET,
   LAMP_SPACING,
@@ -16,9 +17,16 @@ import {
 } from '../core/config';
 import { PART, PIECE } from '../people/body';
 import { DETAIL } from './detail/manifest';
+import { KIT_STRIDE } from './geometry';
+import { CLOTH, PAINT } from './streetLife';
 import { SHAPES } from './trees';
 
 const f = (n: number) => n.toFixed(4);
+/** A colour from a list by a 0..1 value, as GLSL (the same pick as paletteColor() in src/city/streetLife.ts). */
+const palette = (v: string, list: readonly [number, number, number][]) =>
+  list
+    .map((c, i) => `${i < list.length - 1 ? `${v} * ${f(list.length)} < ${f(i + 1)} ? ` : ''}vec3(${c.map(f).join(', ')})`)
+    .join(' : ');
 
 /**
  * The close-up surface detail (src/city/detail.ts), shared by the ground and the buildings. The painters
@@ -1570,9 +1578,11 @@ totalEmissiveRadiance += groundGlow;
 export const PROP_VERT_HEAD = /* glsl */ `
 attribute vec4 iPosYaw;  // x, y, z, yaw
 attribute vec4 iParam;   // scale, tone, birth time, spin speed
-attribute vec4 iState;   // unused, kind (1 lamp, 3 totem; the trees have their own mesh, src/city/treeField.ts), unused, unused
-attribute float aPart;   // 0 solid, 2 lamp glass, 5 metal, 6 glowing
+attribute vec4 iState;   // unused, kind (1 lamp, 3 totem; the trees have their own mesh, src/city/treeField.ts),
+                         // model (the street life kit: which of its mesh's models to show), thrown by the café explosion (0 or 1)
+attribute float aPart;   // 0 solid, 2 lamp glass, 5 metal, 6 glowing, 7 paint, 8 cloth; + ${KIT_STRIDE} × (model + 1) on the kit's models
 attribute vec3 aColor;
+uniform vec4 uBlast;     // the café explosion (see the building shader)
 varying vec3 vColorV;
 varying float vPart;
 varying vec2 vTone;      // tone, unused
@@ -1589,8 +1599,22 @@ void propVertex(out vec3 P, out vec3 N) {
     vColorV = P; vPart = 0.0; vTone = vec2(0.0); vFabric = P; vUp = 0.0;
     return;
   }
+  // The street life kit: each of its two meshes holds every model of its kind, and an instance shows only its own.
+  float kitModel = floor(aPart / ${f(KIT_STRIDE)} + 0.01);
+  float kitPartId = aPart - kitModel * ${f(KIT_STRIDE)};
+  if (kitModel > 0.5 && abs(kitModel - 1.0 - iState.z) > 0.25) {
+    P = vec3(0.0); N = vec3(0.0, 1.0, 0.0);
+    vColorV = P; vPart = 0.0; vTone = vec2(0.0); vFabric = P; vUp = 0.0;
+    return;
+  }
   float kind = iState.y;
   float scale = iParam.x;
+  // Café furniture is thrown with the walls as the blast passes it (src/world/collapse.ts throws the pieces),
+  // and grows back as they heal.
+  if (iState.w > 0.5 && uBlast.w > 0.0) {
+    float bd = length(iPosYaw.xz - uBlast.xy);
+    if (bd < ${f(FURNITURE_DEBRIS_RADIUS)} && uBlast.z > bd) scale *= 1.0 - uBlast.w;
+  }
   vec3 local = position;
   vec3 nrm = normal;
   if (kind < 1.5) {
@@ -1613,7 +1637,7 @@ void propVertex(out vec3 P, out vec3 N) {
   fab.y -= decay * 14.0;
   fab.y += ripple(fab.xz);
   vColorV = aColor;
-  vPart = aPart;
+  vPart = kitPartId;
   vTone = vec2(iParam.y, iState.x);
   vFabric = fab;
   vUp = position.y;
@@ -1649,10 +1673,19 @@ if (vPart > 1.5 && vPart < 2.5) {
 } else if (vPart > 4.5 && vPart < 5.5) {
   propMetal = 0.9;
   propRough = 0.28;
-} else if (vPart > 5.5) {
+} else if (vPart > 5.5 && vPart < 6.5) {
   // Heist mode's sleep machine lights and gramophone horn: lit by their own colour
   diffuseColor.rgb = vColorV * 0.3;
   propGlow = vColorV * 2.2;
+} else if (vPart > 6.5 && vPart < 7.5) {
+  // the street life kit's paint (cars, bicycles): a colour by the instance's tone, glossy
+  diffuseColor.rgb = ${palette('vTone.x', PAINT)};
+  propMetal = 0.35;
+  propRough = 0.32;
+} else if (vPart > 7.5) {
+  // the kit's cloth (café chairs' weave, parasols): each café its own colour, by the instance's tone
+  diffuseColor.rgb = ${palette('vTone.x', CLOTH)};
+  propRough = 0.9;
 }
 `;
 export const PROP_FRAG_ROUGH = /* glsl */ `

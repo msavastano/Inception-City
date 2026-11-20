@@ -482,7 +482,8 @@ export class App implements DreamContext {
     this.folds.update(0);
     this.instability = 0;
     run.place(depth, (x, z) => {
-      const c = this.streamer.collide(x, z, 1);
+      // (clear of the street life kit too, whether or not its models have loaded yet, so a job is laid out the same every time)
+      const c = this.streamer.collide(x, z, 1, true);
       return Math.hypot(c.x - x, c.z - z) < 1e-3;
     });
     this.dreamBorn = this.time;

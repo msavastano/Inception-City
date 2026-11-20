@@ -80,6 +80,8 @@ export interface ChunkData {
   /** Solid footprints for first-person collision. */
   rects: Rect[];
   circles: Circle[];
+  /** The street life kit's footprints, kept apart: they are only solid while the kit is drawn (streamer.collide). */
+  kitCircles: Circle[];
   /** Tallest thing in the chunk, for culling and streaming bounds. */
   maxHeight: number;
 }
@@ -154,6 +156,7 @@ export function generateChunk(cx: number, cz: number, seed: number): ChunkData {
     kit: [],
     rects: [],
     circles: [],
+    kitCircles: [],
     maxHeight: 0,
   };
 
@@ -226,7 +229,7 @@ export function generateChunk(cx: number, cz: number, seed: number): ChunkData {
   // The street life kit, last: it keeps clear of the trees and buildings placed above.
   const life = placeStreetLife(cx, cz, seed, (bx, bz) => ({ kind: blockKind(bx, bz, seed), cafes: districtStyle(bx, bz, seed) !== Style.Concrete }), out);
   out.kit = life.kit;
-  out.circles.push(...life.circles);
+  out.kitCircles = life.circles;
 
   return out;
 }

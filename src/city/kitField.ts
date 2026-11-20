@@ -24,6 +24,8 @@ const MARGIN = 6;
 const MOVE = 2.5;
 /** The far side of a chunk from its centre, metres (with room for what overhangs it). */
 const CHUNK_REACH = CHUNK * 0.72;
+/** The kit is only solid while every ring is drawn further out than this (metres): well past the third-person camera's distance behind the dreamer, so whatever stops you is in view. */
+const SOLID_REACH = 12;
 
 /** One instanced mesh drawing a compact list of one model (no empty slots), and its shadow. */
 class KitList {
@@ -141,6 +143,14 @@ export class KitField {
       this.group.add(list.mesh);
     }
     this.dirty = true;
+  }
+
+  /**
+   * Whether the kit is there to bump into: its models have loaded, and it is drawn at least as far out as
+   * anyone can touch it (the `#kit=` dial can shrink that to nothing). Until then its footprints are not solid.
+   */
+  get solid(): boolean {
+    return this.near[0] !== null && Math.min(this.reach.small, this.reach.large, this.reach.car) > SOLID_REACH;
   }
 
   /** The streamed chunks changed: rebuild the lists. */

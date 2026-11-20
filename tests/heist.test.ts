@@ -35,7 +35,7 @@ function freeIn(seed: number) {
     if (!d) cache.set(k, (d = generateChunk(cx, cz, seed)));
     const r = 1;
     if (d.rects.some((b) => x > b.x0 - r && x < b.x1 + r && z > b.z0 - r && z < b.z1 + r)) return false;
-    return !d.circles.some((c) => Math.hypot(x - c.x, z - c.z) < c.r + r);
+    return ![...d.circles, ...d.kitCircles].some((c) => Math.hypot(x - c.x, z - c.z) < c.r + r);
   };
 }
 

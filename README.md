@@ -115,7 +115,7 @@ npm install
 npm run dev          # http://localhost:5173
 npm test             # fold algebra, generator, hallway and its model, mirror, café explosion, lighting-layout, people, sound, tree and street life tests
 npm run build        # static site in dist/
-npm run build:single # one self-contained HTML file in dist-single/
+npm run build:single # one self-contained HTML file in dist-single/ (its models uncompressed, so it needs no WebAssembly)
 npm run bench        # screenshots of eight fixed views per quality tier, in bench/ (needs Playwright)
 npm run listen       # a recording of the game's sound, scene by scene, in listen/ (needs Playwright)
 ```

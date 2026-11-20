@@ -1,6 +1,8 @@
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { BLOCK, SIDEWALK, streetHalfWidth } from '../src/core/config';
 import { ChunkData, generateChunk } from '../src/city/generator';
+import { CityStreamer } from '../src/city/streamer';
 import { isCar, Kit, KIT_COUNT, KIT_MODELS, KIT_SPEC, kitModel } from '../src/city/kit';
 import { CAR_LENGTH, CAR_WIDTH, CIRCUS_RINGS, KitRec, kitFootprint, LANE_D, ZEBRA } from '../src/city/streetLife';
 import { KIT_WAVE_SPEED } from '../src/city/shaders';
@@ -184,10 +186,35 @@ describe('the street life kit, placed', () => {
     expect(bad.slice(0, 10)).toEqual([]);
   });
 
-  it('gives first person something to bump into', () => {
+  it('gives first person something to bump into, kept apart from the rest', () => {
     const c = chunk(0, -1);
     const kitCircles = c.kit.reduce((n, r) => n + kitFootprint(r).length, 0);
-    expect(c.circles.length).toBeGreaterThanOrEqual(kitCircles);
+    expect(kitCircles).toBeGreaterThan(100);
+    expect(c.kitCircles.length).toBe(kitCircles);
+  });
+
+  it('is only solid while it is drawn, so nothing unseen ever stops you', () => {
+    const streamer = new CityStreamer(SEED, 4);
+    const kit = streamer.kit;
+    // a bench by the start, and a point just inside its footprint
+    const bench = chunk(0, -1).kit.filter((r) => r.model === Kit.Bench).sort((a, b) => Math.hypot(a.x - SPAWN.x, a.z - SPAWN.z) - Math.hypot(b.x - SPAWN.x, b.z - SPAWN.z))[0];
+    const f = kitFootprint(bench)[0];
+    const x = f.x + 0.05;
+    const pushed = (p: { x: number; z: number }) => Math.hypot(p.x - x, p.z - f.z) > 0.1;
+    // no models (as when the file fails to load): walk straight through where it would be
+    expect(kit.solid).toBe(false);
+    expect(pushed(streamer.collide(x, f.z, 0.05))).toBe(false);
+    // asked for anyway (where Heist mode lays out a job), it is in the way
+    expect(pushed(streamer.collide(x, f.z, 0.05, true))).toBe(true);
+    // drawn: in the way
+    const box = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+    kit.use({ near: KIT_SPEC.map(() => box), far: KIT_SPEC.map((s) => (s.far ? box : null)) });
+    expect(kit.solid).toBe(true);
+    expect(pushed(streamer.collide(x, f.z, 0.05))).toBe(true);
+    // drawn only a few metres out (the #kit= dial turned right down): not drawn where you would bump into it, so not solid
+    kit.reach.small = 3;
+    expect(kit.solid).toBe(false);
+    expect(pushed(streamer.collide(x, f.z, 0.05))).toBe(false);
   });
 
   it('owns each street once: neighbouring chunks never place the same piece', () => {

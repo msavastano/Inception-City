@@ -319,8 +319,10 @@ export class CityStreamer {
   /**
    * First-person collision in fabric space: push a circle out of building
    * footprints, tree trunks, lamp posts and the street life kit. Folding never enters into it.
+   * The kit is only solid while it is drawn (`kit`, by default whether its models have loaded and are
+   * drawn near the eye): if they fail to load, there must be nothing there to walk into that cannot be seen.
    */
-  collide(x: number, z: number, r: number): { x: number; z: number } {
+  collide(x: number, z: number, r: number, kit = this.kit.solid): { x: number; z: number } {
     for (let iter = 0; iter < 3; iter++) {
       const cx0 = Math.floor((x - r) / CHUNK);
       const cx1 = Math.floor((x + r) / CHUNK);
@@ -332,16 +334,18 @@ export class CityStreamer {
           const d = this.chunkData(cx, cz);
           // the circles first and the buildings last, so that a walker squeezed between a piece of street furniture
           // and a wall ends up out of the wall
-          for (const c of d.circles) {
-            const dx = x - c.x;
-            const dz = z - c.z;
-            const rr = r + c.r;
-            const d2 = dx * dx + dz * dz;
-            if (d2 >= rr * rr || d2 < 1e-8) continue;
-            const dd = Math.sqrt(d2);
-            x = c.x + (dx / dd) * rr;
-            z = c.z + (dz / dd) * rr;
-            moved = true;
+          for (let pass = 0; pass < (kit ? 2 : 1); pass++) {
+            for (const c of pass === 0 ? d.circles : d.kitCircles) {
+              const dx = x - c.x;
+              const dz = z - c.z;
+              const rr = r + c.r;
+              const d2 = dx * dx + dz * dz;
+              if (d2 >= rr * rr || d2 < 1e-8) continue;
+              const dd = Math.sqrt(d2);
+              x = c.x + (dx / dd) * rr;
+              z = c.z + (dz / dd) * rr;
+              moved = true;
+            }
           }
           for (const b of d.rects) {
             if (x < b.x0 - r || x > b.x1 + r || z < b.z0 - r || z > b.z1 + r) continue;

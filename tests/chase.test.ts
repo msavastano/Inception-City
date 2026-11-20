@@ -42,7 +42,8 @@ describe('the third-person camera boom', () => {
     let pulledIn = 0;
     for (let i = 0; i < 400; i++) {
       // a walker somewhere on the sheet, pushed out of buildings the way Dream Walk does
-      const p = streamer.collide(((i * 37) % 97) * 3.1 - 150, ((i * 53) % 89) * 3.3 - 140, 0.35);
+      // (with the street life kit solid, as it is once drawn: its footprints must not push anyone into a wall)
+      const p = streamer.collide(((i * 37) % 97) * 3.1 - 150, ((i * 53) % 89) * 3.3 - 140, 0.35, true);
       const yaw = i * 0.7;
       const head = { x: p.x, y: CHASE.head, z: p.z };
       const end = { x: p.x - Math.sin(yaw) * CHASE.back, y: CHASE.head + CHASE.rise, z: p.z - Math.cos(yaw) * CHASE.back };

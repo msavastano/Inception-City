@@ -4,6 +4,7 @@ import { Fold, FoldShape, foldPoint } from '../core/fold';
 import { hash3 } from '../core/rng';
 import { BuildingRec, ChunkData, generateChunk } from './generator';
 import { buildingGeometry, groundGeometry, lampGeometry } from './geometry';
+import { KitField } from './kitField';
 import { foldedDepthMaterial, foldedMaterial, pickMaterial } from './materials';
 import { SlabPool } from './pool';
 import { TreeField } from './treeField';
@@ -64,6 +65,8 @@ export class CityStreamer {
   readonly roofs: SlabPool;
   /** The plane trees (src/city/treeField.ts): a near and a far version, each one instanced list. */
   readonly trees = new TreeField();
+  /** The street life kit (src/city/kitField.ts): parked cars, café terraces, benches, kiosks... one instanced list per model. */
+  readonly kit = new KitField();
   readonly lamps: SlabPool;
   readonly groundFine: SlabPool;
   readonly groundCoarse: SlabPool;
@@ -105,6 +108,7 @@ export class CityStreamer {
       this.group.add(pool.mesh);
     }
     this.group.add(this.trees.group);
+    this.group.add(this.kit.group);
 
     const bPick = pickMaterial('building', 2);
     const gPick = pickMaterial('ground', 1);
@@ -140,9 +144,10 @@ export class CityStreamer {
     return d;
   }
 
-  /** Every frame: which trees the eye is close enough to for their near version (folds move them about). */
+  /** Every frame: which trees the eye is close enough to for their near version, and which of the kit to draw (folds move them about). */
   updateTrees(eye: THREE.Vector3, folds: readonly FoldShape[]): void {
     this.trees.update(this.loaded.values(), folds, eye);
+    this.kit.update(this.loaded.values(), folds, eye);
   }
 
   /** Drop everything (used when the dream is re-seeded). */
@@ -242,6 +247,7 @@ export class CityStreamer {
     for (const pool of [this.roofs, this.lamps]) pool.claim(slot);
     const chunk: LoadedChunk = { key: key(cx, cz), cx, cz, slot, data, fine: false, props: false, propsBorn: born, born };
     this.loaded.set(chunk.key, chunk);
+    this.kit.changed();
 
     const grow = (i: number) => this.edits.get(`${cx},${cz},${i}`) ?? 1;
     const writeB = (pool: SlabPool, list: ChunkData['buildings']) => {
@@ -306,12 +312,13 @@ export class CityStreamer {
     if (!c) return;
     for (const pool of [this.buildings, this.roofs, this.lamps, this.groundFine, this.groundCoarse]) pool.release(c.slot);
     this.loaded.delete(k);
+    this.kit.changed();
     if (c.props) this.trees.changed();
   }
 
   /**
    * First-person collision in fabric space: push a circle out of building
-   * footprints and tree trunks. Folding never enters into it.
+   * footprints, tree trunks, lamp posts and the street life kit. Folding never enters into it.
    */
   collide(x: number, z: number, r: number): { x: number; z: number } {
     for (let iter = 0; iter < 3; iter++) {
@@ -323,6 +330,19 @@ export class CityStreamer {
       for (let cz = cz0; cz <= cz1; cz++) {
         for (let cx = cx0; cx <= cx1; cx++) {
           const d = this.chunkData(cx, cz);
+          // the circles first and the buildings last, so that a walker squeezed between a piece of street furniture
+          // and a wall ends up out of the wall
+          for (const c of d.circles) {
+            const dx = x - c.x;
+            const dz = z - c.z;
+            const rr = r + c.r;
+            const d2 = dx * dx + dz * dz;
+            if (d2 >= rr * rr || d2 < 1e-8) continue;
+            const dd = Math.sqrt(d2);
+            x = c.x + (dx / dd) * rr;
+            z = c.z + (dz / dd) * rr;
+            moved = true;
+          }
           for (const b of d.rects) {
             if (x < b.x0 - r || x > b.x1 + r || z < b.z0 - r || z > b.z1 + r) continue;
             const px = Math.min(Math.max(x, b.x0), b.x1);
@@ -345,17 +365,6 @@ export class CityStreamer {
               x = opts[0][0];
               z = opts[0][1];
             }
-            moved = true;
-          }
-          for (const c of d.circles) {
-            const dx = x - c.x;
-            const dz = z - c.z;
-            const rr = r + c.r;
-            const d2 = dx * dx + dz * dz;
-            if (d2 >= rr * rr || d2 < 1e-8) continue;
-            const dd = Math.sqrt(d2);
-            x = c.x + (dx / dd) * rr;
-            z = c.z + (dz / dd) * rr;
             moved = true;
           }
         }

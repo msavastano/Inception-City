@@ -15,6 +15,7 @@ import * as THREE from 'three';
  *   hall         0 | 1                    the rotating hallway as the modelled corridor (1) or the painted box it replaced (0)
  *   detail       0 .. 2.5                 the scanned grain of the surfaces close to: asphalt, paving, setts, stone (0 none)
  *   trees        0 .. 2                   how far out the trees keep their near version, every branch and leaf (0: far version only)
+ *   kit          0 .. 2                   how far out the street life kit is drawn: parked cars, café terraces, kiosks (0: none)
  *   exposure, contrast, saturation        multiply every level's own
  */
 export type ToneCurve = 'neutral' | 'agx' | 'aces';
@@ -47,6 +48,8 @@ export const LOOK = {
   detail: 1,
   /** Multiplies how far out the trees keep their near version (0: the far one everywhere, as on Low). */
   trees: 1,
+  /** Multiplies how far out the street life kit is drawn (0: none of it). */
+  kit: 1,
   /** Multiply every level's exposure and grade. */
   exposure: 1,
   contrast: 1,
@@ -57,7 +60,7 @@ export const LOOK = {
 export function readLook(params: URLSearchParams): void {
   const tone = params.get('tone');
   if (tone && tone in TONE_CURVES) LOOK.tone = tone as ToneCurve;
-  for (const key of ['ao', 'haze', 'glow', 'relief', 'hall', 'detail', 'trees', 'exposure', 'contrast', 'saturation'] as const) {
+  for (const key of ['ao', 'haze', 'glow', 'relief', 'hall', 'detail', 'trees', 'kit', 'exposure', 'contrast', 'saturation'] as const) {
     const v = params.get(key);
     if (v !== null && v !== '' && Number.isFinite(Number(v))) LOOK[key] = Math.max(0, Number(v));
   }

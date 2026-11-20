@@ -1,11 +1,10 @@
 import * as THREE from 'three';
-import { COLLAPSE_RADIUS, FURNITURE_DEBRIS_RADIUS } from '../core/config';
+import { COLLAPSE_RADIUS } from '../core/config';
 import { rng } from '../core/rng';
 import { Style } from '../city/generator';
 import { shardGeometry } from '../city/geometry';
 import { U, foldedDepthMaterial, foldedMaterial } from '../city/materials';
 import type { BuildingBox } from '../city/streamer';
-import { CLOTH, Furniture, type KitRec, paletteColor } from '../city/streetLife';
 
 /**
  * THE CAFÉ EXPLOSION
@@ -68,44 +67,6 @@ const AWNINGS: [number, number, number][] = [
 ];
 const SHOP_HEIGHT = 4.6;
 
-type RGB = [number, number, number];
-/**
- * What a piece of café furniture breaks into: centre (x, y, z in the model's frame, +z to the street), size, and
- * colour (or 'cloth', the café's own colour). The models are in src/city/geometry.ts.
- */
-type Piece = [x: number, y: number, z: number, w: number, h: number, t: number, tint: RGB | 'cloth'];
-const ZINC: RGB = [0.78, 0.77, 0.73];
-const IRON: RGB = [0.07, 0.09, 0.08];
-const RATTAN: RGB = [0.36, 0.23, 0.12];
-const chairPieces = (x: number, z: number, bx: number, bz: number): Piece[] => [
-  [x, 0.45, z, 0.4, 0.4, 0.04, 'cloth'],
-  [x + bx, 0.66, z + bz, 0.4, 0.32, 0.04, 'cloth'],
-  [x, 0.24, z, 0.32, 0.45, 0.05, RATTAN],
-];
-const PIECES: Partial<Record<Furniture, Piece[]>> = {
-  [Furniture.CafePair]: [
-    [0, 0.73, 0.3, 0.56, 0.56, 0.04, ZINC],
-    [0, 0.36, 0.3, 0.07, 0.7, 0.07, IRON],
-    ...chairPieces(-0.36, -0.22, 0, -0.19),
-    ...chairPieces(0.36, -0.22, 0, -0.19),
-  ],
-  [Furniture.CafeParasol]: [
-    [0, 0.73, 0, 0.64, 0.64, 0.04, ZINC],
-    [0, 0.36, 0, 0.07, 0.7, 0.07, IRON],
-    [0, 1.7, 0, 0.05, 1.9, 0.05, [0.55, 0.57, 0.58]],
-    [0, 2.5, 0, 2.1, 1.9, 0.05, 'cloth'],
-    ...chairPieces(-0.58, 0, -0.19, 0),
-    ...chairPieces(0.58, 0, 0.19, 0),
-  ],
-};
-
-/** How many pieces a list of café furniture breaks into. */
-export function furniturePieces(furniture: readonly KitRec[]): number {
-  let n = 0;
-  for (const p of furniture) n += PIECES[p.variant as Furniture]?.length ?? 0;
-  return n;
-}
-
 interface Wall {
   b: BuildingBox;
   /** Outward normal and the direction along the wall. */
@@ -128,56 +89,11 @@ interface Wall {
  * the shader's holes: denser near the blast, on walls that face it, and never
  * from a wall pressed against a neighbour. Pure, so it can be tested.
  */
-export function planShards(
-  buildings: readonly BuildingBox[],
-  cx: number,
-  cz: number,
-  budget: number,
-  seed: number,
-  furniture: readonly KitRec[] = [],
-): ShardPlan {
+export function planShards(buildings: readonly BuildingBox[], cx: number, cz: number, budget: number, seed: number): ShardPlan {
   const R = COLLAPSE_RADIUS;
   const plan = { count: 0 } as ShardPlan;
   for (const [name, size] of Object.entries(ATTRS)) plan[name as AttrName] = new Float32Array(budget * size);
   const rand = rng(seed);
-
-  // The café furniture first: the prop shader hides all of it inside FURNITURE_DEBRIS_RADIUS as the wave
-  // passes, so every piece of it must fly (the walls share out what is left of the budget).
-  let n = 0;
-  for (const f of furniture) {
-    const pieces = PIECES[f.variant as Furniture];
-    const dist = Math.hypot(f.x - cx, f.z - cz);
-    if (!pieces || dist >= FURNITURE_DEBRIS_RADIUS) continue;
-    const t0 = dist / WAVE_SPEED;
-    const ux = dist > 1e-3 ? (f.x - cx) / dist : 1;
-    const uz = dist > 1e-3 ? (f.z - cz) / dist : 0;
-    const c = Math.cos(f.yaw);
-    const sn = Math.sin(f.yaw);
-    const cloth = paletteColor(CLOTH, f.tone);
-    const push = 1 - (0.6 * dist) / FURNITURE_DEBRIS_RADIUS;
-    for (const [lx, ly, lz, w, h, t, tint] of pieces) {
-      if (n >= budget) break;
-      const x = f.x + c * lx + sn * lz;
-      const z = f.z - sn * lx + c * lz;
-      const speed = (4 + 10 * rand()) * push;
-      const side = (rand() - 0.5) * 4;
-      let ax = rand() * 2 - 1;
-      let ay = rand() * 2 - 1;
-      let az = rand() * 2 - 1;
-      const al = Math.hypot(ax, ay, az) || 1;
-      ax /= al;
-      ay /= al;
-      az /= al;
-      const rgb = tint === 'cloth' ? cloth : tint;
-      plan.aOrigin.set([x, ly, z, t0], n * 4);
-      plan.aVel.set([ux * speed - uz * side, 1.5 + 5 * rand(), uz * speed + ux * side, (1 + 6 * rand()) * (rand() < 0.5 ? -1 : 1)], n * 4);
-      plan.aSpin.set([ax, ay, az, f.yaw], n * 4);
-      plan.aShape.set([w, h, t, 0], n * 4);
-      plan.aTint.set([rgb[0], rgb[1], rgb[2], rand()], n * 4);
-      plan.aSink[n] = 0;
-      n++;
-    }
-  }
 
   // Exposure test: a point just outside a wall must not be inside another building.
   const CELL = 16;
@@ -231,9 +147,9 @@ export function planShards(
       weights.push(total);
     }
   }
-  plan.count = n;
   if (total <= 0) return plan;
 
+  let n = 0;
   for (let tries = 0; n < budget && tries < budget * 8; tries++) {
     const pick = rand() * total;
     let lo = 0;

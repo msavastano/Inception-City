@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { COLLAPSE_RADIUS, FURNITURE_DEBRIS_RADIUS, MAX_FOLDS } from './core/config';
+import { COLLAPSE_RADIUS, MAX_FOLDS } from './core/config';
 import { Fold, FoldStack, foldPoint } from './core/fold';
 import { totemGeometry } from './city/geometry';
 import { loadSurfaceDetail } from './city/detail';
@@ -302,8 +302,7 @@ export class App implements DreamContext {
       if (hit) f = { x: hit.x, z: hit.z };
     }
     const near = this.streamer.buildingsNear(f.x, f.z, COLLAPSE_RADIUS);
-    const furniture = this.streamer.furnitureNear(f.x, f.z, FURNITURE_DEBRIS_RADIUS);
-    this.collapse.start(f.x, f.z, planShards(near, f.x, f.z, QUALITY[this.quality].shards, Math.floor(this.time * 1000), furniture));
+    this.collapse.start(f.x, f.z, planShards(near, f.x, f.z, QUALITY[this.quality].shards, Math.floor(this.time * 1000)));
     this.audio.shatter();
     this.flash = Math.max(this.flash, 0.3);
     // in a job the blast hurts; the kick that follows is free (see heistCrash)

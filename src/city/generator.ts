@@ -1,6 +1,5 @@
 import { BLOCK, BOULEVARD_TREES, CHUNK, CHUNK_BLOCKS, LAMP_OFFSET, LAMP_SPACING, PLAZA_TREE_INSET, SLAB, streetHalfWidth } from '../core/config';
 import { fbm2, hash3, rng } from '../core/rng';
-import { type KitRec, placeStreetLife } from './streetLife';
 
 /**
  * Deterministic city generation. A chunk is a pure function of (seed, cx, cz):
@@ -75,9 +74,6 @@ export interface ChunkData {
   roofs: BuildingRec[];
   trees: PropRec[];
   lamps: PropRec[];
-  /** The street life kit (src/city/streetLife.ts): small furniture, and the fixtures and parked cars. */
-  furniture: KitRec[];
-  fixtures: KitRec[];
   /** Solid footprints for first-person collision. */
   rects: Rect[];
   circles: Circle[];
@@ -152,8 +148,6 @@ export function generateChunk(cx: number, cz: number, seed: number): ChunkData {
     roofs: [],
     trees: [],
     lamps: [],
-    furniture: [],
-    fixtures: [],
     rects: [],
     circles: [],
     maxHeight: 0,
@@ -224,22 +218,6 @@ export function generateChunk(cx: number, cz: number, seed: number): ChunkData {
       }
     }
   }
-
-  // The street life kit, last, so it can keep out of the trees' and towers' way.
-  const kit = placeStreetLife(
-    cx,
-    cz,
-    seed,
-    (bx, bz) => {
-      const kind = blockKind(bx, bz, seed);
-      const style = districtStyle(bx, bz, seed);
-      return { kind, cafes: kind === BlockKind.Perimeter && (style === Style.Haussmann || style === Style.Brick) };
-    },
-    out,
-  );
-  out.furniture = kit.furniture;
-  out.fixtures = kit.fixtures;
-  out.circles.push(...kit.circles);
 
   return out;
 }

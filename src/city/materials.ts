@@ -19,6 +19,13 @@ import {
   GROUND_FRAG_ROUGH,
   GROUND_FRAG_WET,
   GROUND_VERT_HEAD,
+  KIT_FRAG_AO,
+  KIT_FRAG_COLOR,
+  KIT_FRAG_EMISSIVE,
+  KIT_FRAG_HEAD,
+  KIT_FRAG_METAL,
+  KIT_FRAG_ROUGH,
+  KIT_VERT_HEAD,
   PERSON_FRAG_AO,
   PERSON_FRAG_COLOR,
   PERSON_FRAG_EMISSIVE,
@@ -111,6 +118,7 @@ export const U = {
   // How far from the eye the trees still cast their shadows (metres: start of the fade, end): further out
   // their shade on the ground is painted (crownShade in the ground painter), at no cost per leaf.
   uTreeShadow: { value: new THREE.Vector2(150, 180) },
+  uKitShadow: { value: new THREE.Vector2(120, 150) },
 };
 
 /** No leaves and no twigs: what the trees wear until the leaf atlas has been drawn. */
@@ -120,7 +128,7 @@ function bareLeaves(): THREE.DataTexture {
   return tex;
 }
 
-type Kind = 'building' | 'ground' | 'prop' | 'person' | 'shard' | 'tree';
+type Kind = 'building' | 'ground' | 'prop' | 'person' | 'shard' | 'tree' | 'kit';
 
 /** One texel per detail layer, standing for a flat surface of average roughness with no cavities. */
 function flatDetail(): THREE.DataArrayTexture {
@@ -190,6 +198,18 @@ const SPEC: Record<Kind, { vert: string; frag: string; call: string; replace: [s
       ['#include <normal_fragment_maps>', TREE_FRAG_NORMAL],
       ['#include <emissivemap_fragment>', TREE_FRAG_EMISSIVE],
       ['#include <aomap_fragment>', TREE_FRAG_AO],
+    ],
+  },
+  kit: {
+    vert: KIT_VERT_HEAD,
+    frag: KIT_FRAG_HEAD,
+    call: 'kitVertex',
+    replace: [
+      ['#include <color_fragment>', KIT_FRAG_COLOR],
+      ['#include <roughnessmap_fragment>', KIT_FRAG_ROUGH],
+      ['#include <metalnessmap_fragment>', KIT_FRAG_METAL],
+      ['#include <emissivemap_fragment>', KIT_FRAG_EMISSIVE],
+      ['#include <aomap_fragment>', KIT_FRAG_AO],
     ],
   },
   shard: {

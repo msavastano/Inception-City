@@ -22,8 +22,8 @@
 // --repeat 3 loads each view three times and reports the middle time and the spread.
 // --settle 3000 starts every view 3 s after its page opened, whatever the build had to load first,
 // which keeps a build that loads more (and so starts later) comparable with one that loads less.
-// --parts trees,near-trees,far-trees,near-tree-shadows,far-tree-shadows,tree-prepass (with --time) then times the same
-// frame with each of those left out in turn, in the same page, and reports how much each one costs.
+// --parts trees,near-trees,far-trees,near-tree-shadows,far-tree-shadows,tree-prepass,kit,near-kit,far-kit,kit-shadows (with
+// --time) then times the same frame with each of those left out in turn, in the same page, and reports how much each one costs.
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -119,6 +119,14 @@ const VIEWS = [
   { id: 'boulevard-snow', extra: true, note: 'Level 3: the boulevard in snow', level: 3, at: [3, -175, 0, 0.1] },
   { id: 'crowd', extra: true, note: 'Pedestrians at a busy crossing', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, frames: 40 },
   { id: 'stares', extra: true, note: 'The dream unsteady: the crowd stops and stares', level: 1, at: [69.5, -128, 0, -0.2], gather: 3, unstable: 0.55, frames: 160, dt: 0.05 },
+  // The street life kit (src/city/streetLife.ts). `spawn` is exactly where Dream Walk and Heist mode put you first.
+  { id: 'spawn', extra: true, note: 'Where Dream Walk starts: the boulevard corner south of the Circus, facing it', level: 1, at: [10.2, -70, 0, 0.08] },
+  { id: 'spawn-back', extra: true, note: 'From the start, turned round: down the boulevard', level: 1, at: [10.2, -70, Math.PI, 0.08] },
+  { id: 'kerb', extra: true, note: 'Along an ordinary street: parked cars and a café terrace', level: 1, at: [66.5, -120, 0.06, 0.05] },
+  { id: 'circus-kit', extra: true, note: 'Out in the Circus: its terraces, kiosk and metro', level: 1, at: [30, -52, -0.6, 0.06] },
+  { id: 'street-above', extra: true, note: 'A street from above: the parked cars and terraces', level: 1, cam: { pos: [64, 24, -175], target: [64, 0, -120] } },
+  { id: 'circus-metro', extra: true, note: 'In the Circus: the metro entrance, a kiosk and the columns in the south-west quarter', level: 1, at: [-12.5, -40, -2.55, 0.1] },
+  { id: 'circus-north', extra: true, note: 'In the Circus: the fountain and the second terrace in the northern quarters', level: 1, at: [28, 28, 0.6, 0.08] },
 ];
 
 function args() {
@@ -289,6 +297,11 @@ async function shoot([v, time, settle, parts]) {
         'far-tree-shadows': [() => [t.far.mesh], 'castShadow'],
         // (without the depth pass, the trees' colour writes depth itself)
         'tree-prepass': [() => [{ set visible(on) { t.setPrepass(on); } }], 'visible'],
+        // the street life kit (builds without it skip these)
+        kit: [() => [d.streamer.kit?.group], 'visible'],
+        'near-kit': [() => (d.streamer.kit?.near ?? []).filter(Boolean).map((l) => l.mesh), 'visible'],
+        'far-kit': [() => (d.streamer.kit?.far ?? []).filter(Boolean).map((l) => l.mesh), 'visible'],
+        'kit-shadows': [() => (d.streamer.kit?.near ?? []).filter((l) => l?.mesh.castShadow).map((l) => l.mesh), 'castShadow'],
       };
       const time20 = () => {
         for (let i = 0; i < 3; i++) draw();

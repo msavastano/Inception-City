@@ -2176,6 +2176,256 @@ metalnessFactor = mix(0.0, 0.7, vGlass);
 `;
 
 // ---------------------------------------------------------------------------
+// The street life kit: café furniture, street furniture and parked cars, modelled in Blender
+// (art/street/build_street.py, src/city/streetKit.ts) and drawn one instanced list per model (src/city/kitField.ts)
+// ---------------------------------------------------------------------------
+
+/** How fast the café explosion's wave runs out (m/s of dream time): WAVE_SPEED in src/world/collapse.ts. */
+export const KIT_WAVE_SPEED = 140;
+
+export const KIT_VERT_HEAD = /* glsl */ `
+attribute vec4 iKit;     // fabric x, z, yaw, birth time
+attribute vec4 iLook;    // paint tone, cloth tone, drawn out to this far from the eye (m), 1 if the café explosion throws it
+attribute vec4 aTint;    // base colour, kind / 16 (KINDS in build_street.py)
+attribute vec2 aKitUv;   // posters and stairwells: where on them (metres)
+uniform vec3 uEye;       // the main camera: the shadow pass fades by the same distances it sees
+uniform vec2 uKitShadow; // the kit casts shadows out to here from the eye (metres: fade start, end)
+uniform vec4 uBlast;     // the café explosion: centre x, z (fabric), wave front radius, strength (0 while the dream holds)
+varying vec3 vKitColor;
+varying vec3 vKitPaint;  // the instance's own colour: a car's paint (kind 4) or a café's cloth (kind 5)
+varying float vKind;
+varying vec2 vKitUv;
+varying vec3 vFabric;
+varying vec3 vLocal;     // where on the model (metres, before it is turned): low parts are darker
+varying float vUpN;      // how much the surface faces up (snow settles there)
+${FOLD_GLSL}
+
+// Car paint, about as often as each colour is seen parked in Paris (linear).
+vec3 kitPaint(float t) {
+  if (t < 0.2) return vec3(0.74, 0.74, 0.72);
+  if (t < 0.38) return vec3(0.42, 0.43, 0.44);
+  if (t < 0.52) return vec3(0.16, 0.17, 0.18);
+  if (t < 0.68) return vec3(0.018, 0.018, 0.02);
+  if (t < 0.78) return vec3(0.02, 0.045, 0.13);
+  if (t < 0.85) return vec3(0.36, 0.025, 0.025);
+  if (t < 0.89) return vec3(0.03, 0.08, 0.045);
+  if (t < 0.94) return vec3(0.45, 0.38, 0.27);
+  if (t < 0.97) return vec3(0.18, 0.32, 0.46);
+  return vec3(0.55, 0.38, 0.03);
+}
+// A café's colours: its chairs' weave and its parasols.
+vec3 kitCloth(float t) {
+  if (t < 0.22) return vec3(0.46, 0.05, 0.04);
+  if (t < 0.4) return vec3(0.05, 0.2, 0.1);
+  if (t < 0.55) return vec3(0.05, 0.08, 0.22);
+  if (t < 0.7) return vec3(0.62, 0.56, 0.44);
+  if (t < 0.82) return vec3(0.28, 0.04, 0.08);
+  if (t < 0.92) return vec3(0.6, 0.42, 0.12);
+  return vec3(0.04, 0.04, 0.045);
+}
+vec3 kitRotY(vec3 v, float a) { float c = cos(a), s = sin(a); return vec3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z); }
+vec3 kitTumble(vec3 v, vec3 k, float a) { float c = cos(a), s = sin(a); return v * c + cross(k, v) * s + k * dot(k, v) * (1.0 - c); }
+
+void kitVertex(out vec3 P, out vec3 N) {
+  // how far the piece's foot is from the eye, folded: it shrinks into the pavement over the last stretch of its ring
+  vec3 foot = vec3(iKit.x, 0.0, iKit.y);
+  vec3 up = vec3(0.0, 1.0, 0.0);
+  applyFolds(iKit.xy, foot, up);
+  float d = distance(foot, uEye);
+  float s = smoothstep(iKit.w, iKit.w + 1.2, uTime) * (1.0 - smoothstep(iLook.z * 0.9, iLook.z, d));
+#ifdef KIT_SHADOW
+  s *= step(d, uKitShadow.y);
+#endif
+  if (s < 0.01) {
+    P = vec3(0.0); N = vec3(0.0, 1.0, 0.0);
+    vKitColor = P; vKitPaint = P; vKind = 0.0; vKitUv = vec2(0.0); vFabric = P; vLocal = P; vUpN = 0.0;
+    return;
+  }
+  vec3 local = position * s;
+  vec3 nrm = normal;
+  vec3 fab = vec3(iKit.x, 0.0, iKit.y);
+  // The café explosion: light furniture is thrown out from the blast, tumbling, and lands; as the dream heals it flies back.
+  if (iLook.w > 0.5 && uBlast.w > 0.0) {
+    vec2 away = iKit.xy - uBlast.xy;
+    float dist = length(away);
+    float t = (uBlast.z - dist) / ${f(KIT_WAVE_SPEED)};
+    float reach = 1.0 - smoothstep(${f(COLLAPSE_RADIUS * 0.45)}, ${f(COLLAPSE_RADIUS)}, dist);
+    if (t > 0.0 && reach > 0.0) {
+      float seed = hash12(iKit.xy * 1.37);
+      vec2 dir = away / max(dist, 0.001);
+      float lift = (2.5 + 4.0 * seed) * reach;
+      float speed = (5.0 + 9.0 * hash12(iKit.yx * 2.11)) * reach;
+      float land = 2.0 * lift / 9.8;
+      float tf = min(t, land);
+      float slide = min(max(t - land, 0.0), 0.5);
+      float k = uBlast.w;
+      vec3 axis = normalize(vec3(-dir.y, 0.4 * (seed - 0.5), dir.x));
+      float spin = (2.5 + 4.0 * seed) * tf * k;
+      vec3 pivot = vec3(0.0, 0.45, 0.0);
+      local = kitTumble(local - pivot, axis, spin) + pivot;
+      nrm = kitTumble(nrm, axis, spin);
+      fab.xz += dir * speed * (tf + slide * 0.5) * k;
+      fab.y += (lift * tf - 4.9 * tf * tf) * k;
+    }
+  }
+  fab += kitRotY(local, iKit.z);
+  nrm = kitRotY(nrm, iKit.z);
+  fab.y -= limboDecay(iKit.xy, 0.6) * 14.0;
+  fab.y += ripple(fab.xz);
+  vKitColor = aTint.rgb;
+  vKind = aTint.w * 16.0;
+  vKitPaint = vKind > 4.5 ? kitCloth(iLook.y) : kitPaint(iLook.x);
+  vKitUv = aKitUv;
+  vFabric = fab;
+  vLocal = position;
+  P = fab;
+  N = nrm;
+  applyFolds(iKit.xy, P, N);
+  vUpN = N.y;
+}
+`;
+
+export const KIT_FRAG_HEAD = /* glsl */ `
+varying vec3 vKitColor;
+varying vec3 vKitPaint;
+varying float vKind;
+varying vec2 vKitUv;
+varying vec3 vFabric;
+varying vec3 vLocal;
+varying float vUpN;
+uniform float uNight;
+uniform float uSnow;
+uniform float uWet;
+uniform vec4 uLook;      // ambient occlusion strength, night glow strength (src/world/look.ts)
+uniform vec3 uFoliageA;
+uniform vec3 uFoliageB;
+float kitHash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float kitNoise(vec2 p) {
+  vec2 i = floor(p); vec2 u = fract(p); u = u * u * (3.0 - 2.0 * u);
+  return mix(mix(kitHash(i), kitHash(i + vec2(1, 0)), u.x), mix(kitHash(i + vec2(0, 1)), kitHash(i + vec2(1, 1)), u.x), u.y);
+}
+vec3 kitPosterInk(float h) {
+  if (h < 0.18) return vec3(0.62, 0.08, 0.05);
+  if (h < 0.32) return vec3(0.05, 0.12, 0.35);
+  if (h < 0.46) return vec3(0.8, 0.62, 0.12);
+  if (h < 0.58) return vec3(0.04, 0.04, 0.05);
+  if (h < 0.7) return vec3(0.12, 0.38, 0.32);
+  if (h < 0.82) return vec3(0.75, 0.3, 0.1);
+  return vec3(0.55, 0.12, 0.4);
+}
+// Posters (or, smaller, magazines) in rows: a picture block and lines of print on each, a thin dark margin between.
+// uv in metres, scale the size of a sheet (1: a poster); dw how far uv moves across a pixel, to soften what is too fine to see.
+vec3 kitPosters(vec2 uv, float scale, float dw) {
+  vec2 cell = vec2(0.84, 1.14) * scale;
+  vec2 g = uv / cell;
+  g.x += 0.5 * mod(floor(g.y), 2.0);
+  vec2 id = floor(g);
+  vec2 f = fract(g);
+  float h = kitHash(id + 3.7);
+  float h2 = kitHash(id.yx + 9.1);
+  vec3 paper = h2 < 0.35 ? vec3(0.78, 0.74, 0.64) : kitPosterInk(fract(h * 3.1));
+  vec3 ink = h2 < 0.35 ? kitPosterInk(h) : (h2 < 0.7 ? vec3(0.8, 0.77, 0.7) : vec3(0.03));
+  // a picture: a block or a disc in the upper part
+  vec2 q = (f - vec2(0.5, 0.62)) * cell;
+  float pic = h < 0.5 ? step(abs(q.x), cell.x * 0.32) * step(abs(q.y), cell.y * 0.2) : step(length(q), cell.x * 0.3);
+  // lines of print below it
+  float lines = step(0.12, f.y) * step(f.y, 0.34) * step(0.5, fract(f.y * 18.0)) * step(0.14, f.x) * step(f.x, 0.86 - 0.3 * kitHash(vec2(floor(f.y * 18.0), h)));
+  vec3 col = mix(paper, ink, max(pic * (0.55 + 0.45 * h2), lines));
+  vec2 m = 0.03 / cell;
+  float sheet = step(m.x, f.x) * step(f.x, 1.0 - m.x) * step(m.y, f.y) * step(f.y, 1.0 - m.y);
+  col = mix(vec3(0.03, 0.05, 0.04), col, sheet);
+  // too fine to see: the sheet's average
+  vec3 mean = mix(paper, ink, 0.3) * 0.9;
+  return mix(col, mean, smoothstep(0.08, 0.3, dw / cell.x));
+}
+`;
+
+export const KIT_FRAG_COLOR = /* glsl */ `
+#include <color_fragment>
+// taken before any branch on the kind (a derivative inside one is undefined)
+float kitDw = max(fwidth(vKitUv.x), fwidth(vKitUv.y));
+float kind = floor(vKind + 0.5);
+vec3 kitCol = vKitColor;
+float kitRough = 0.82;
+float kitMetal = 0.0;
+vec3 kitGlow = vec3(0.0);
+float kitSnow = 1.0;
+// whatever stands on the pavement is darkest where it meets it
+float kitAO = mix(0.55, 1.0, smoothstep(0.0, 0.45, vLocal.y));
+if (kind < 1.5) {
+  // matte: stone, wood, rattan, marble
+} else if (kind < 2.5) {
+  kitRough = 0.5; kitMetal = 0.35;
+} else if (kind < 3.5) {
+  kitRough = 0.22; kitMetal = 1.0;
+} else if (kind < 4.5) {
+  kitCol *= vKitPaint; kitRough = 0.28; kitMetal = 0.25;
+} else if (kind < 5.5) {
+  kitCol *= vKitPaint; kitRough = 0.92;
+} else if (kind < 6.5) {
+  kitCol = vec3(0.015, 0.017, 0.02); kitRough = 0.06; kitMetal = 0.1;
+} else if (kind < 7.5) {
+  kitGlow = vKitColor * (0.25 + 4.5 * uNight) * mix(1.0, uLook.y, uNight);
+  kitCol *= 0.5; kitRough = 0.2; kitSnow = 0.0;
+} else if (kind < 8.5) {
+  kitRough = 0.95;
+} else if (kind < 9.5) {
+  // posters (green = 1) or magazines (smaller): lit from inside after dark
+  kitCol = kitPosters(vKitUv, vKitColor.g, kitDw);
+  kitRough = 0.6;
+  kitGlow = kitCol * 0.6 * uNight * uLook.y;
+  kitSnow = 0.0;
+} else if (kind < 10.5) {
+  float n = kitNoise(vFabric.xz * 9.0 + vLocal.y * 7.0) * 0.6 + kitNoise(vFabric.zx * 23.0 - vLocal.y * 19.0) * 0.4;
+  kitCol = mix(uFoliageA, uFoliageB, n) * (0.55 + 0.6 * n);
+  kitRough = 0.85;
+  kitAO *= 0.75 + 0.25 * n;
+} else if (kind < 11.5) {
+  kitSnow = 0.0;
+  if (vKitColor.r < 0.005) {
+    // the shade under a car
+    kitCol = vec3(0.004);
+  } else {
+    // the steps down into the metro: a light nosing on each, darker the deeper they go
+    float depth = vKitUv.y;
+    float step01 = smoothstep(0.78, 0.86, fract(depth / 0.3)) * (1.0 - smoothstep(0.02, 0.6, kitDw * 3.0));
+    float walls = smoothstep(0.62, 0.8, abs(vKitUv.x));
+    kitCol = vec3(0.1, 0.095, 0.085) * exp(-depth * 0.75) * (0.55 + 0.45 * step01) * (1.0 - 0.6 * walls);
+  }
+  kitRough = 0.9;
+} else {
+  kitRough = 0.3;
+}
+// snow settles on what faces up; rain makes everything shine
+float kitSnowCover = uSnow * kitSnow * smoothstep(0.55, 0.85, vUpN);
+kitCol = mix(kitCol, vec3(0.88, 0.9, 0.93), kitSnowCover);
+kitRough = mix(kitRough, 0.75, kitSnowCover);
+kitMetal *= 1.0 - kitSnowCover;
+kitRough = mix(kitRough, kitRough * 0.45, uWet * (1.0 - kitSnowCover));
+diffuseColor.rgb = kitCol;
+`;
+export const KIT_FRAG_ROUGH = /* glsl */ `
+#include <roughnessmap_fragment>
+roughnessFactor = kitRough;
+`;
+export const KIT_FRAG_METAL = /* glsl */ `
+#include <metalnessmap_fragment>
+metalnessFactor = kitMetal;
+`;
+export const KIT_FRAG_EMISSIVE = /* glsl */ `
+#include <emissivemap_fragment>
+totalEmissiveRadiance += kitGlow;
+`;
+export const KIT_FRAG_AO = /* glsl */ `
+#include <aomap_fragment>
+{
+  float skyAO = mix(1.0, kitAO, uLook.x);
+  reflectedLight.indirectDiffuse *= skyAO;
+  reflectedLight.indirectSpecular *= mix(1.0, skyAO, 0.7);
+}
+`;
+
+// ---------------------------------------------------------------------------
 // GPU picking: renders fabric coordinates instead of colour
 // ---------------------------------------------------------------------------
 

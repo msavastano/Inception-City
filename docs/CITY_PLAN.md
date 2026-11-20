@@ -424,6 +424,40 @@ Before and after, from the bench (Medium, the same seed and view):
 
 ![Level 3: the boulevard in snow, before and after](images/plane-trees/boulevard-snow-medium.jpg)
 
+### 5.15 Street life
+
+At eye level a Paris street is mostly what stands in it: cars parked nose to tail along both kerbs, café chairs in a row against the shop fronts, bollards at the corners, bicycles, benches, a kiosk, a metro entrance. The city had lamps and trees and nothing else, so its streets looked swept for a film shoot. A first try at this (#16) was too sparse and too short-sighted to notice from where Dream Walk starts, and was taken out again (#17); this is the second.
+
+- **Modelled in Blender.** [`art/street/build_street.py`](../art/street/build_street.py) builds fifteen models from numbers: a café terrace (two bistro chairs with woven seats and bentwood backs, a round marble table), a table and four chairs under a canvas parasol, a bench of slats on cast-iron ends, a bollard, a steel hoop with a bicycle against it, a planter with a clipped hedge, an A-frame chalkboard, a litter bin, an advertising column with its dome, a news kiosk, a metro entrance (balustrade round the stairwell, lamp stalks and a sign over the mouth), a drinking fountain under a dome held up by four figures, and three generic cars (a hatchback, a saloon and a small van, no maker's shapes or marks). Each corner carries its colour and its kind of surface (matte, cast iron, chrome, paint, canvas, glass, lamp, rubber, poster, leaves, the dark of a stairwell, plastic); nothing is baked and no texture ships. [`scripts/pack-street.mjs`](../scripts/pack-street.mjs) runs it and packs the result with meshopt: 19 models in 190 kB, 184 to 3,850 triangles each. The cars and the parasol tables also have a far version (about 190 and 144 triangles): the car as a few loft sections with six-sided wheels, the table without its chairs.
+- **Placed by seed.** [`src/city/streetLife.ts`](../src/city/streetLife.ts) places the kit as part of each chunk, owning the same streets as the chunk's lamps. Along every kerb, cars are parked nose to tail in the road from 1 m past each zebra, with 0.6 to 1.9 m between them and an empty space now and then, facing the way the traffic on that side drives (8% the other way); about one stretch in five starts with a corral of three to five bicycles. Shop fronts on Haussmann and brick streets get café terraces (one or two per side of a block, nine in ten near the start) with planters and a chalkboard; tower fronts get planters; bins stand by the lamps; bollards line the corners, now and then a whole street; benches sit between the boulevard planes. Plazas get a metro, a kiosk, columns, a fountain ringed by benches and a terrace under parasols; parks benches facing their middles, with bins; tower forecourts benches, planters and columns. The Circus is laid out by hand: bollards round the ring road, benches facing the lawn and round the hub, and in each quarter one of four layouts (the terrace under parasols, the metro, the fountain, a second terrace), so the start is furnished in every direction. About 1,000 pieces a chunk, some 300 of them cars.
+- **Out of everyone's way.** Nothing stands in the crowd's lanes (1.7 m in from the building lines, 5.9), on a zebra or in a crossing, and nothing overlaps a lamp, a tree or another piece; `tests/streetLife.test.ts` checks all of it over 36 chunks. Every piece adds its footprint to first-person collision (circles: three along a car), and collision now settles the buildings last, so a walker pressed between a piece and a wall ends up outside the wall.
+- **Drawn by distance.** [`src/city/kitField.ts`](../src/city/kitField.ts) keeps one instanced list per model, compact like the trees' (5.14), rebuilt from the streamed chunks whenever the eye has moved 2.5 m, a fold has moved or a chunk has come or gone, measuring each piece where its foot stands once folded. There are three reaches: the small furniture (Medium 100 m), the large (columns, kiosks, metro entrances, fountains and parasols, 260 m) and the cars (360 m, out to where the streamed props end, so the parked cars run down every street as far as the lamps do). Cars beyond 60 m and parasols beyond the small reach are drawn in their far version. Each piece grows in when its chunk arrives and shrinks away over the last tenth of its reach, so nothing pops. Only the near versions cast shadows, and only within 150 m. `#kit=` scales the three reaches (0 is none, 2 twice as far).
+- **One shader.** The kit is one more folded material (6.6). The car paint and the café colours come from small palettes picked by each piece's tones; chrome and glass reflect the sky; the lamps on the kiosks and the metro glow at night; the posters on the columns and the magazines on the kiosks are painted from noise, so they look printed and say nothing. Rain wets it and Snow settles on its tops. The café explosion's wave throws the light furniture (chairs, parasols, benches, racks, planters, menus and bins) up and over in its path, tumbling; the cars and the fixtures stay put.
+
+- **What it costs.** A 190 kB file, fetched at start; the city draws without it until it arrives, and carries on without it if it fails. On the CPU, the lists are rebuilt in 0.3 ms (1 to 2 ms with folds) about twice a second at a walk. On the GPU, the kit is one more draw call per list that has something in it: Low goes from 11 to about 30 draw calls, Medium and High from 33 to 64 (with their shadows), and the bench counts 0.4 to 0.5 million more triangles on Low, 1.0 to 1.4 million on Medium and 2.0 to 2.4 million on High, most of them the far cars.
+
+Timed on an integrated GPU (AMD Radeon Vega 8, 1280 × 720, the middle of three page loads per view, against main), the kit adds about 5% to the frame on every tier: Low 0.8 to 1.5 ms (on about 24 ms), Medium 2.4 to 3.9 ms (on about 62 ms), High 3.6 to 5.7 ms (on about 80 ms). Timed in the same page load with each part left out, on Low it is almost all the near versions and the far ones are lost in the noise. In real play from the start (`npm run play`) automatic quality takes that machine from High to Medium within 5 s and to Low by 17 s, as it does on main, and holds Low at the same 24 to 26 frames a second as main while the two walk the same route; on Low it still draws about 250 pieces near the walker and 850 cars further out.
+
+`npm run play` (`scripts/play.mjs`) plays Dream Walk the way a player does: no tier in the link, so automatic quality is on; it clicks Dream Walk and walks a fixed route from the start, holding W, at a real frame rate, recording each second the frame rate, the tier, the draw calls and what the kit is drawing, and taking screenshots. The bench has views for the kit (spawn, spawn-back, kerb, circus-kit, circus-metro, circus-north, street-above) and `--parts kit,near-kit,far-kit,kit-shadows` times it in one page load.
+
+Before and after, from the bench (the same seed and view):
+
+![Where Dream Walk starts, facing the Circus, before and after](images/street-life/spawn-medium.jpg)
+
+![The same on Low quality, which automatic quality picks on an integrated GPU](images/street-life/spawn-low.jpg)
+
+![Along an ordinary street, before and after](images/street-life/kerb-medium.jpg)
+
+![The same street on Low, before and after](images/street-life/kerb-low.jpg)
+
+![Out in the Circus among the parasols, before and after](images/street-life/circus-kit-medium.jpg)
+
+![The Circus's metro quarter, before and after](images/street-life/circus-metro-medium.jpg)
+
+![The Circus's northern quarters, before and after](images/street-life/circus-north-medium.jpg)
+
+![A street from above, before and after](images/street-life/street-above-medium.jpg)
+
 ## 6. Scaling
 
 The goal is a city that is effectively infinite, foldable in real time, and still smooth on a phone. Each of the decisions below exists to keep one cost constant as the city grows.
@@ -447,6 +481,7 @@ The result is about fourteen draw calls for the whole city, whether it has two t
 - **Ground tiles** come in two tessellations. Only chunks crossed by a curl get the fine 40 × 40 grid needed to bend smoothly. Everywhere else a 2 × 2 tile is enough.
 - **Props** (trees and lamps) are only written for chunks inside a smaller ring around the viewer, with their own budget per frame.
 - **Trees** have a near and a far version (5.14): the near one, every branch and leaf, for the closest 256 within 60 m on Medium (80 m High, 100 m Ultra), dithered into the far one, its limbs and about fifty camera-facing cards, everywhere else. Low draws only the far one. Only the trees within 180 m on Medium (240 m High, 300 m Ultra) cast shadows; further out their shade is painted.
+- **The street life kit** (5.15) is drawn out to three reaches by size, the cars furthest, as far as the props; cars beyond 45 to 90 m by tier, and parasol tables beyond the small furniture's reach, are drawn in a far version of under 200 triangles. Only the near versions cast shadows.
 - **Facades** fade their window pattern to its average colour once a window is only a few pixels wide, which removes moiré without textures or mipmaps. The rooms behind the windows are only traced while a window is big enough on screen to show one, and the window reveals, frames and carved joints (5.11) only within a few dozen metres.
 - **The crowd** is a single instanced mesh of skinned people (5.9). Its size follows the quality tier, from 180 to 900 people, and only those within 110 m are drawn into the shadow map.
 - **The café explosion** throws between 1,600 (Low) and 7,000 (Ultra) shards, all in one instanced mesh that is hidden the rest of the time. The building shader's blast branch costs one uniform test per pixel while the dream holds.
@@ -522,8 +557,11 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 ### Milestone 1.11: surface detail (done)
 - The grain of asphalt, paving, setts, gravel, worn stone and board-marked concrete close to, from seven CC0 scans of which only the shape is kept, in one texture array of 1.2 MB, with granite gutters along the kerbs (5.13)
 
-### Milestone 1.12: plane trees (this release)
+### Milestone 1.12: plane trees (done)
 - London planes grown in code, a boulevard kind pruned flat on the facade side and a park kind, each with a near version of every branch and leaf and a far one of its limbs and a few big cards, leaves cut from an atlas the game draws itself, with wind, seasons by level and lamp light at night (5.14)
+
+### Milestone 1.13: street life (this release)
+- Parked cars along most kerbs as far out as the lamps, café terraces, bollards, benches, bicycles, kiosks, metro entrances, columns and fountains, modelled in Blender in a 190 kB file, placed by seed clear of the crowd and the crossings, the Circus furnished by hand (5.15)
 
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
@@ -556,6 +594,9 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `src/city/pool.ts` | The slab allocator for instanced attributes |
 | `src/city/trees.ts` | The plane trees: the two shapes, how they are grown, their near and far versions, the leaf atlas |
 | `src/city/treeField.ts` | Which trees are out and which are close enough for their near version, as two instanced lists |
+| `src/city/streetLife.ts` | Where the street life kit stands: the parked cars, the terraces and the rest of the street furniture, the squares and the Circus |
+| `src/city/kit.ts`, `src/city/streetKit.ts` | The kit's models: their ids and how each is drawn, and loading them from `src/city/street/street.glb` |
+| `src/city/kitField.ts` | Which pieces of the kit are near enough to draw, in one instanced list per model and its far version |
 | `src/city/streamer.ts` | World-space streaming, LOD, collision and raise-brush edits |
 | `src/world/` | Sky, sun and weather, dream levels, the projections crowd |
 | `src/world/atmosphere.ts` | The sky's colour function and the haze that replaces fog in every folded material |

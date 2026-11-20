@@ -42,8 +42,6 @@ Districts are not hand-placed. Two low-frequency noise fields ("downtown" and "o
 
 Boulevards carry London planes in a row down each side, 2.5 m out from the building line, pruned flat on the facade side and leaning over the road (5.14); parks and the corners of the squares have a broader, rounder kind. Every street has lamps on both sides at a fixed rhythm (every 32 m), which at night lay pools of warm light on the pavement. Zebra crossings mark every intersection, and they double as the projections' crossing points.
 
-The sidewalks carry the rest of a Paris street (5.15): café terraces against the facades of the shopping streets, benches, bollards at the corners, bike racks, Morris columns, kiosks, metro entrances on the squares, and cars parked along the kerbs. All of it keeps the crowd's two lanes, 1.7 m in from the building line, clear.
-
 ---
 
 ## 3. The rules of the dream
@@ -426,25 +424,6 @@ Before and after, from the bench (Medium, the same seed and view):
 
 ![Level 3: the boulevard in snow, before and after](images/plane-trees/boulevard-snow-medium.jpg)
 
-### 5.15 Street life kit
-
-The sidewalks had lamps, trees and nothing else, so a street read as a corridor between two walls. The kit adds the things that make it a Paris street, as item 6 of the realism plan asked: café furniture, benches, bollards, bike racks, Morris columns, kiosks, metro entrances and parked cars.
-
-- **Built in code, not in Blender.** The plan suggested modelling the kit in Blender and baking its colours into an atlas. Every piece turned out to be a handful of boxes, tubes and discs, so [`src/city/geometry.ts`](../src/city/geometry.ts) builds them at start with their colours in the vertices, the same way the lamps are built. Nothing is downloaded and nothing needs a texture: the game's JavaScript grows by about 13 kB (5 kB gzipped). If the pieces ever need more shape than that, the models can be swapped for Blender files without touching the placement.
-- **Eleven pieces in two meshes.** The furniture mesh holds a pair of café chairs at a round table, a café set under a parasol, a pair of bollards, a bench and a bike rack (960 vertices in all). The fixtures mesh holds a Morris column, a newspaper kiosk, an Art Nouveau metro entrance with its two lamps, and three cars: a small one, a saloon and a van (1,152 vertices). Each instance keeps only its own model (the shader collapses every other model's vertices to a point), and its paint (cars, kiosks, columns) and cloth (parasols, bench slats) take one of a few colours by a number per instance, so a row of cars is not one colour.
-- **Where things go.** [`src/city/streetLife.ts`](../src/city/streetLife.ts) places the kit from the chunk's seed, block by block. The squares get a metro entrance, a kiosk, a column and a row of parasols; the parks a column or a kiosk at their corners, a bench along their edges and now and then a metro entrance; the towers a column at the foot. Along the streets, the shopping blocks (the perimeter blocks with cafés on the ground floor) put out a terrace of tables against the facade, with the awnings painted above them; the boulevards have benches between the trees, facing the shops; the corners have bollards just past the zebra crossing; and here and there a bike rack and a run of one to three parked cars, in the road against the kerb, never across a crossing. Around the Circus nothing is placed. On average a chunk has about 100 pieces of furniture and 44 fixtures.
-- **Clear of the crowd.** The crowd walks two lanes on each sidewalk, 1.7 m in from the building line, and nothing in the kit stands within 0.3 m of a lane below head height (the tests check every vertex). The terraces sit between the facade and the near lane, the benches, bollards and racks between the far lane and the kerb. Nothing lands on a lamp or a tree either.
-- **Walked round.** Each piece adds one to three circles to the chunk's collision, the same circles the lamps and trees use, so the dreamer walks round a bench and is stopped by a car. They add nothing to the boxes the third-person camera keeps out of, so the camera does not bump on a bollard.
-- **Only close to.** The kit is drawn only in the chunks within 45% of the props ring (6.4), measured once folded, which on Medium is about six chunks. From further out a bollard is a pixel. Each chunk that has the kit takes one slab of 160 furniture and one of 80 fixtures, apart from its other slabs, so the instance count stays at the chunks that are close.
-- **In the café explosion.** The café chairs, tables and parasols near the blast are thrown with the walls: they are the first shards in the plan, each piece of the set its own shard, leaving as the wave reaches them, while the furniture itself hides from the same moment. As the street heals it grows back in place. Nothing else in the kit is thrown; the cars and kiosks stand.
-- **What it costs.** Two draw calls on Low, where the furniture and the fixtures are drawn once and there are no shadows; three elsewhere, where the fixtures also cast shadows (the small furniture does not: its shadow is a smudge the contact shadows already give). That is within the plan's budget of two on Low, four on Medium and six on High. Most of the vertex work is the empty instances of a slab collapsing: about 1 million vertex invocations a frame on Low, 1.9 million on Medium, 2.6 million on High and 3.7 million on Ultra, most of them early-outs, where the lamps alone are about 1.7 million on Medium. It has not been timed on a GPU yet.
-
-A preview of the pieces and of a shopping street, drawn by a small software renderer from the game's own models and placement, without its lighting, painting or haze (not frames from the game):
-
-![The kit in a row: three cars, a metro entrance, a kiosk, a Morris column, a bike rack, a bench, bollards, a parasol set and a café pair](images/street-life/lineup.jpg)
-
-![A shopping street: a café terrace against the facade, a bollard at the corner and cars parked along the kerb](images/street-life/street.jpg)
-
 ## 6. Scaling
 
 The goal is a city that is effectively infinite, foldable in real time, and still smooth on a phone. Each of the decisions below exists to keep one cost constant as the city grows.
@@ -459,9 +438,9 @@ Candidate chunks are enumerated in fabric space around the camera's fabric focus
 
 ### 6.3 Constant draw calls
 
-Each kind of object (buildings, roofs and chimneys, fine ground, coarse ground, lamps, the crowd, the monument) is a single instanced mesh. Each loaded chunk owns one fixed-size slab of instances in each mesh (224 buildings, 288 roof pieces, 128 lamps, and near the eye 160 pieces of street furniture and 80 fixtures). Loading a chunk writes its slab and uploads just that range. Unloading zeroes it. Empty slots collapse to a point in the vertex shader before any fold maths runs. The trees are the exception: their near and far versions are two compact lists, rebuilt when a chunk's props come or go and, for the near one, as the eye moves (5.14), because a slab's empty slots cost too much at a couple of thousand triangles a tree. Each list is drawn twice, its depth and then its colour (5.14).
+Each kind of object (buildings, roofs and chimneys, fine ground, coarse ground, lamps, the crowd, the monument) is a single instanced mesh. Each loaded chunk owns one fixed-size slab of instances in each mesh (224 buildings, 288 roof pieces, 128 lamps). Loading a chunk writes its slab and uploads just that range. Unloading zeroes it. Empty slots collapse to a point in the vertex shader before any fold maths runs. The trees are the exception: their near and far versions are two compact lists, rebuilt when a chunk's props come or go and, for the near one, as the eye moves (5.14), because a slab's empty slots cost too much at a couple of thousand triangles a tree. Each list is drawn twice, its depth and then its colour (5.14).
 
-The result is about fourteen draw calls for the whole city, whether it has two thousand buildings or twenty thousand. (At night the lamp halos add one more, and another in the Rain, where the wet street mirrors them.) The street furniture adds two, or three where there are shadows (5.15).
+The result is about fourteen draw calls for the whole city, whether it has two thousand buildings or twenty thousand. (At night the lamp halos add one more, and another in the Rain, where the wet street mirrors them.)
 
 ### 6.4 Level of detail
 
@@ -543,11 +522,8 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 ### Milestone 1.11: surface detail (done)
 - The grain of asphalt, paving, setts, gravel, worn stone and board-marked concrete close to, from seven CC0 scans of which only the shape is kept, in one texture array of 1.2 MB, with granite gutters along the kerbs (5.13)
 
-### Milestone 1.12: plane trees (done)
+### Milestone 1.12: plane trees (this release)
 - London planes grown in code, a boulevard kind pruned flat on the facade side and a park kind, each with a near version of every branch and leaf and a far one of its limbs and a few big cards, leaves cut from an atlas the game draws itself, with wind, seasons by level and lamp light at night (5.14)
-
-### Milestone 1.13: the street life kit (this release)
-- Café terraces, benches, bollards, bike racks, Morris columns, kiosks, metro entrances and parked cars, built in code and placed from the seed, clear of the crowd's lanes, walked round, and thrown in the café explosion (5.15)
 
 ### Milestone 2: a shared dream
 - Multiplayer through an ordered fold log over WebRTC or a small relay. Each fold is a six-number event with a timestamp, so late joiners replay the log and arrive in the same city.
@@ -579,7 +555,6 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `scripts/pack-detail.mjs` | Packs the scanned surfaces from Poly Haven into `src/city/detail/` |
 | `src/city/pool.ts` | The slab allocator for instanced attributes |
 | `src/city/trees.ts` | The plane trees: the two shapes, how they are grown, their near and far versions, the leaf atlas |
-| `src/city/streetLife.ts` | The street life kit: which pieces go where along the streets and in the blocks, and their collision circles |
 | `src/city/treeField.ts` | Which trees are out and which are close enough for their near version, as two instanced lists |
 | `src/city/streamer.ts` | World-space streaming, LOD, collision and raise-brush edits |
 | `src/world/` | Sky, sun and weather, dream levels, the projections crowd |
@@ -609,4 +584,4 @@ A whole dream is a seed, a level, a time of day and at most eight folds of six n
 | `scripts/listen.mjs` | The listening bench: the game's sound recorded scene by scene, with levels |
 | `scripts/bench.mjs` | The screenshot bench: eight seeded views per quality tier, with draw calls, triangles and memory |
 | `src/ui/` | Styles and the HUD totem |
-| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror, café explosion, Heist mode, third-person camera, lighting-layout, people, sound, tree and street life tests |
+| `tests/` | Fold algebra, generator, hallway, ride, wet-street mirror, café explosion, Heist mode, third-person camera, lighting-layout, people, sound and tree tests |

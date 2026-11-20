@@ -27,10 +27,6 @@ export const SLAB = {
   roof: 288,
   tree: 128,
   lamp: 128,
-  /** The street life kit (src/city/streetLife.ts): café sets, bollards, benches and bicycle racks. */
-  furniture: 160,
-  /** The street life kit: advertising columns, news kiosks, metro entrances and parked cars. */
-  fixtures: 80,
 } as const;
 
 /** Ground tile tessellation: coarse tiles are rigid, fine tiles can bend. */
@@ -39,8 +35,6 @@ export const GROUND_COARSE_SEGMENTS = 2;
 
 /** How far from the dreamer the facades blow out when stability hits zero (the café explosion). */
 export const COLLAPSE_RADIUS = 140;
-/** Café furniture this close to the blast is thrown with the walls (the prop shader hides it as the wave passes). */
-export const FURNITURE_DEBRIS_RADIUS = 70;
 
 /** Lamp spacing along every street (lamps sit at 16 and 48 metres into each block). */
 export const LAMP_SPACING = 32;

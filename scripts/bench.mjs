@@ -22,8 +22,8 @@
 // --repeat 3 loads each view three times and reports the middle time and the spread.
 // --settle 3000 starts every view 3 s after its page opened, whatever the build had to load first,
 // which keeps a build that loads more (and so starts later) comparable with one that loads less.
-// --parts trees,near-trees,far-trees,near-tree-shadows,far-tree-shadows,tree-prepass (with --time) then times the same
-// frame with each of those left out in turn, in the same page, and reports how much each one costs.
+// --parts trees,near-trees,far-trees,near-tree-shadows,far-tree-shadows,tree-prepass,kit,near-kit,far-kit,kit-shadows (with
+// --time) then times the same frame with each of those left out in turn, in the same page, and reports how much each one costs.
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -297,6 +297,11 @@ async function shoot([v, time, settle, parts]) {
         'far-tree-shadows': [() => [t.far.mesh], 'castShadow'],
         // (without the depth pass, the trees' colour writes depth itself)
         'tree-prepass': [() => [{ set visible(on) { t.setPrepass(on); } }], 'visible'],
+        // the street life kit (builds without it skip these)
+        kit: [() => [d.streamer.kit?.group], 'visible'],
+        'near-kit': [() => (d.streamer.kit?.near ?? []).filter(Boolean).map((l) => l.mesh), 'visible'],
+        'far-kit': [() => (d.streamer.kit?.far ?? []).filter(Boolean).map((l) => l.mesh), 'visible'],
+        'kit-shadows': [() => (d.streamer.kit?.near ?? []).filter((l) => l?.mesh.castShadow).map((l) => l.mesh), 'castShadow'],
       };
       const time20 = () => {
         for (let i = 0; i < 3; i++) draw();

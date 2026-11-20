@@ -157,10 +157,25 @@ async function main() {
     }, leg.yaw);
     if (leg.run) await page.keyboard.down('ShiftLeft');
     const end = elapsed + leg.share * o.seconds * 1000;
+    let turned = false;
     while (elapsed < end) {
       await page.waitForTimeout(1000);
       elapsed += 1000;
-      rows.push({ leg: leg.note, ...(await page.evaluate(sample)) });
+      const row = { leg: leg.note, ...(await page.evaluate(sample)) };
+      // caught on something (a café terrace, a parked car, a wall): steer off to one side for a second, as a player would,
+      // then back onto the leg's heading, so two builds still walk much the same route
+      const last = rows[rows.length - 1];
+      const stuck = last && Math.hypot(row.x - last.x, row.z - last.z) < 0.4;
+      if (stuck || turned) {
+        turned = stuck && !turned;
+        await page.evaluate((yaw) => {
+          const w = window.dream.walk;
+          w.yaw = yaw;
+          w.bodyYaw = yaw;
+        }, leg.yaw + (turned ? 1.2 : 0));
+        if (stuck) row.steered = true;
+      }
+      rows.push(row);
       if (elapsed >= nextShot) {
         nextShot += every;
         await shoot(`walk-${++shot}.jpg`);
